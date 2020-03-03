@@ -39,10 +39,6 @@ const style = withStyles(theme => ({
   input: {
     width: "100%",
   },
-  button: {
-    backgroundColor: "#3C0E5E",
-    color: "#FFF",
-  },
 }));
 
 const formatAmountString = amount => {
@@ -236,17 +232,18 @@ export const SendCard = style(({ balance, channel, classes, ethProvider, history
           <Grid item xs={6}>
             <Button
               disableTouchRipple
-              className={classes.button}
-              disabled={!!amount.error}
+              className={ classes.button }
+              disabled={ !!amount.error }
               fullWidth
-              onClick={() => {
+              onClick={ () => {
                 linkHandler();
-              }}
+              } }
               size="large"
               variant="contained"
+              color="primary"
+              endIcon={<LinkIcon />}
             >
               Link
-              <LinkIcon style={{ marginLeft: "5px" }} />
             </Button>
           </Grid>
           <Grid item xs={6}>
@@ -265,9 +262,10 @@ export const SendCard = style(({ balance, channel, classes, ethProvider, history
               }}
               size="large"
               variant="contained"
+              color="primary"
+              endIcon={<SendIcon />}
             >
               Send
-              <SendIcon style={{ marginLeft: "5px" }} />
             </Button>
           </Grid>
         </Grid>
@@ -277,12 +275,6 @@ export const SendCard = style(({ balance, channel, classes, ethProvider, history
         <Button
           disableTouchRipple
           variant="outlined"
-          style={{
-            background: "#FFF",
-            border: "1px solid #F22424",
-            color: "#F22424",
-            width: "15%",
-          }}
           size="medium"
           onClick={() => history.push("/")}
         >

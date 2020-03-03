@@ -25,7 +25,6 @@ const style = withStyles(theme => ({
     width: "100%",
     height: "70%",
     justifyContent: "center",
-    backgroundColor: "#FFFFFF",
     padding: "4% 4% 4% 4%",
   },
   icon: {
@@ -47,7 +46,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
   const [showRecovery, setShowRecovery] = useState(false);
   const [showWarning, setShowWarning] = useState(false);
 
-  const useWalletConnext = getWalletConnext()
+  const useWalletConnext = getWalletConnext();
 
   const generateNewAddress = async () => {
     setIsBurning(true);
@@ -82,7 +81,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
         <SettingsIcon className={classes.icon} />
       </Grid>
 
-  {/*    <Grid item xs={12} className={classes.button}>
+      {/*<Grid item xs={12} className={classes.button}>
         <Button
           disableTouchRipple
           fullWidth
@@ -100,8 +99,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
         >
           Support
         </Button>
-      </Grid>
-*/}
+      </Grid>*/}
 
       <Grid item xs={12} className={classes.button}>
         {!showRecovery ? (
@@ -109,8 +107,8 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
             disableTouchRipple
             fullWidth
             className={classes.button}
-            variant="outlined"
             color="primary"
+            variant="contained"
             size="large"
             onClick={() => setShowRecovery(true)}
           >
@@ -128,7 +126,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
             fullWidth
             className={classes.button}
             color="primary"
-            variant="outlined"
+            variant="contained"
             size="large"
             onClick={() => setInputRecovery(true)}
           >
@@ -168,9 +166,9 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
           disableTouchRipple
           fullWidth
           style={{
-            background: "#FFF",
+            background: "#F22424",
             border: "1px solid #F22424",
-            color: "#F22424",
+            color: "#fff",
           }}
           size="large"
           onClick={() => setShowWarning(true)}
@@ -234,9 +232,9 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
                       <Button
                         disableTouchRipple
                         style={{
-                          background: "#FFF",
+                          background: "#F22424",
                           border: "1px solid #F22424",
-                          color: "#F22424",
+                          color: "#fff",
                           marginLeft: "5%",
                         }}
                         variant="outlined"
@@ -258,19 +256,13 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
         <Button
           disableTouchRipple
           variant="outlined"
-          style={{
-            background: "#FFF",
-            border: "1px solid #F22424",
-            color: "#F22424",
-            width: "15%",
-          }}
           size="medium"
           onClick={() => history.push("/")}
         >
           Back
         </Button>
       </Grid>
-      
+
       <Grid item xs={12}>
         <div>{navigator.userAgent + ' appName=' + navigator.appName}</div>
       </Grid>

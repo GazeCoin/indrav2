@@ -100,12 +100,6 @@ export const RequestCard = style(props => {
         <Button
           disableTouchRipple
           variant="outlined"
-          style={{
-            background: "#FFF",
-            border: "1px solid #F22424",
-            color: "#F22424",
-            width: "15%",
-          }}
           size="medium"
           onClick={() => props.history.push("/")}
         >

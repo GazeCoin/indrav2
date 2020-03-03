@@ -75,40 +75,34 @@ export const Home = style(({ balance, swapRate, channel, history, parseQRCode, a
         direction="column"
         style={{ paddingLeft: "2%", paddingRight: "2%", textAlign: "center" }}
       >
-        <Grid item xs={12} style={{ paddingTop: "10%" }}>
+        <Grid item xs={12} style={{ paddingTop: "10%", paddingBottom: '5%' }}>
           <Grid container spacing={2} direction="row" alignItems="center" justify="center">
-            <Grid item xs={12} >
+            <Grid item xs={12}>
               <Button
                 disableTouchRipple
                 fullWidth
-                style={{
-                  color: "#FFF",
-                  backgroundColor: "#3C0E5E",
-                }}
+                color="primary"
                 variant="contained"
                 size="large"
                 component={Link}
                 to="/request"
+                endIcon={<ReceiveIcon />}
               >
                 Receive From Friend
-                <ReceiveIcon style={{ marginLeft: "5px" }} />
               </Button>
             </Grid>
-            <Grid item xs={12} >
+            <Grid item xs={12}>
               <Button
                 disableTouchRipple
                 fullWidth
-                style={{
-                  color: "#FFF",
-                  backgroundColor: "#3C0E5E",
-                }}
+                color="primary"
                 size="large"
                 variant="contained"
                 component={Link}
                 to="/send"
+                endIcon={<SendIcon />}
               >
                 Send To Friend
-                <SendIcon style={{ marginLeft: "5px" }} />
               </Button>
             </Grid>
           </Grid>
@@ -119,23 +113,20 @@ export const Home = style(({ balance, swapRate, channel, history, parseQRCode, a
         />
         <Grid item xs={12}>
           <Button
-             style={{ marginBottom: "5%" }}
-             fullWidth
-             color="primary"
-             variant="outlined"
-             size="large"
-             component={Link}
-             to="/swaptips"
-           >
-             Convert to Tips
+            disableTouchRipple
+            fullWidth
+            variant="outlined"
+            size="large"
+            component={Link}
+            to="/swaptips"
+          >
+            Convert to Tips
           </Button>
         </Grid>
         <Grid item xs={12}>
           <Button
             disableTouchRipple
-            style={{ marginBottom: "5%" }}
             fullWidth
-            color="primary"
             variant="outlined"
             size="large"
             component={Link}
@@ -147,9 +138,7 @@ export const Home = style(({ balance, swapRate, channel, history, parseQRCode, a
         <Grid item xs={12}>
           <Button
             disableTouchRipple
-            style={{ marginBottom: "5%" }}
             fullWidth
-            color="primary"
             variant="outlined"
             size="large"
             component={Link}

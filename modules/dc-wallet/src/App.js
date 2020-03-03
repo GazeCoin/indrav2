@@ -102,7 +102,7 @@ const style = withStyles(theme => ({
     alignItems: "center",
     flexGrow: 1,
     fontFamily: ["proxima-nova", "sans-serif"],
-    backgroundColor: "#686868",
+    // backgroundColor: "#686868",
     width: "100%",
     margin: "0px",
   },

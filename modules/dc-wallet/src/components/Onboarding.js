@@ -55,9 +55,7 @@ class Onboarding extends React.Component {
         >
           <Grid item xs={12}>
             <Button
-              style={{ marginBottom: "5%" }}
               fullWidth
-              color="primary"
               variant="outlined"
               size="large"
               component={Link1}

@@ -35,7 +35,7 @@ export const ChannelCard = withStyles(styles)(props => {
           paddingRight: "5%",
           paddingTop: "10%",
           paddingBottom: "5%",
-          backgroundColor: "#282b2e",
+          // backgroundColor: "#282b2e",
           textAlign: "center",
         }}
         alignItems="center"
@@ -67,9 +67,6 @@ export const ChannelCard = withStyles(styles)(props => {
             </Typography>
           </span> */}
         </Grid>
-
-{/*        <br /> */}
-
         <Grid item xs={12}>
           <span id="balance-channel-tips">
             <Typography style={{display: 'inline-block'}} variant="h4" className={classes.row}>

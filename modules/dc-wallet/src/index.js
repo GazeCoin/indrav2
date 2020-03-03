@@ -8,12 +8,16 @@ import * as serviceWorker from "./serviceWorker";
 
 const theme = createMuiTheme({
   palette: {
+    type: "dark",
     primary: {
       main: "#3C0E5E",
     },
     secondary: {
-      main: "#282b2e",
-      light: "#1E96CC",
+      main: "#101010",
+    },
+    background: {
+      default: '#000000',
+      paper: '#101010',
     },
   },
   typography: {

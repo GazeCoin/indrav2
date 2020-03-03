@@ -27,10 +27,6 @@ const styles = theme => ({
   input: {
     width: "100%",
   },
-  button: {
-    backgroundColor: "#3C0E5E",
-    color: "#FFF",
-  },
 });
 
 const PaymentStates = {
@@ -257,14 +253,15 @@ class BuyTipsCard extends Component {
           <Grid container direction="row" alignItems="center" justify="center" spacing={8}>
             <Grid item xs={6}>
               <Button
-                  className={classes.button}
-                  disabled={!!amount.error || !!tips.error}
-                  fullWidth
-                  onClick={() => {
-                    this.buyTipsHandler();
-                  }}
-                  size="medium"
-                  variant="contained"
+                className={classes.button}
+                disabled={!!amount.error || !!tips.error}
+                fullWidth
+                onClick={() => {
+                  this.buyTipsHandler();
+                }}
+                size="medium"
+                color="primary"
+                variant="contained"
               >
                 {buyOrSell + ' TIP TOKENS'}
               </Button>
@@ -274,12 +271,6 @@ class BuyTipsCard extends Component {
         <Grid item xs={12}>
           <Button
             variant="outlined"
-            style={{
-              background: "#FFF",
-              border: "1px solid #F22424",
-              color: "#F22424",
-              width: "15%",
-            }}
             size="medium"
             onClick={() => this.props.history.push("/")}
           >
