@@ -162,9 +162,9 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
           disableTouchRipple
           fullWidth
           style={{
-            color: '#A90004',
-            textShadow: '0 0 4px #A90004',
-            boxShadow: '0 0 4px #A90004',
+            color: '#FF000C',
+            textShadow: '0 0 4px #FF000C',
+            boxShadow: '0 0 4px #FF000C',
           }}
           onClick={() => setShowWarning(true)}
         >
@@ -189,7 +189,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
             }}
           >
             <DialogTitle disableTypography>
-              <Typography variant="h5" style={{ color: "#A90004" }}>
+              <Typography variant="h5" style={{ color: "#FF000C" }}>
                 Are you sure you want to burn your Card?
               </Typography>
             </DialogTitle>
@@ -205,7 +205,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
               ) : (
                 <Grid container alignItems="center" justify="center" direction="column">
                   <Grid item xs={12}>
-                    <DialogContentText variant="body1" style={{ color: "#A90004" }}>
+                    <DialogContentText variant="body1" style={{ color: "#FF000C" }}>
                       You will lose access to your funds unless you save your backup phrase!
                     </DialogContentText>
                   </Grid>
@@ -215,9 +215,9 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
                         disableTouchRipple
                         variant="outlined"
                         style={{
-                          color: '#A90004',
-                          textShadow: '0 0 4px #A90004',
-                          boxShadow: '0 0 4px #A90004',
+                          color: '#FF000C',
+                          textShadow: '0 0 4px #FF000C',
+                          boxShadow: '0 0 4px #FF000C',
                         }}
                         onClick={async () => await generateNewAddress()}
                       >
@@ -230,9 +230,9 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
                         }}
                         variant="outlined"
                         style={{
-                          color: '#A90004',
-                          textShadow: '0 0 4px #A90004',
-                          boxShadow: '0 0 4px #A90004',
+                          color: '#FF000C',
+                          textShadow: '0 0 4px #FF000C',
+                          boxShadow: '0 0 4px #FF000C',
                         }}
                         onClick={() => setShowWarning(false)}
                       >

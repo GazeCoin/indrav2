@@ -10,14 +10,13 @@ const theme = createMuiTheme({
   palette: {
     type: "dark",
     primary: {
-      // main: "#3C0E5E",
-      main: "#EF96FE",
+      main: "#E900FF",
     },
     secondary: {
       main: "#101010",
     },
     error: {
-      main: '#A90004',
+      main: '#FF000C',
     },
     background: {
       default: '#000000',
@@ -35,14 +34,14 @@ const theme = createMuiTheme({
   overrides: {
     MuiButton: {
       outlined: {
-        color: '#06A500',
-        textShadow: '0 0 4px #06A500',
-        boxShadow: '0 0 4px #06A500',
+        color: '#10FF00',
+        textShadow: '0 0 4px #10FF00',
+        boxShadow: '0 0 4px #10FF00',
       },
       outlinedPrimary: {
-        color: '#EF96FE',
-        textShadow: '0 0 4px #EF96FD',
-        boxShadow: '0 0 4px #EF96FD',
+        color: '#E900FF',
+        textShadow: '0 0 4px #E900FF',
+        boxShadow: '0 0 4px #E900FF',
       },
     },
   }
