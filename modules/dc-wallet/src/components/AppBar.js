@@ -36,7 +36,8 @@ export const AppBarComponent = props => (
           to="/deposit"
           style={{
             padding: "0",
-            borderRadius: "0"
+            borderRadius: "0",
+            color: "#ffffff"
           }}
         >
           <img

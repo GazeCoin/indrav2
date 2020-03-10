@@ -255,7 +255,6 @@ export const RedeemCard = style(({ channel, classes, history, location, token })
           disabled={!state.matches("ready")}
           fullWidth
           onClick={() => takeAction("CONFIRM")}
-          size="large"
           variant="contained"
         >
           Redeem

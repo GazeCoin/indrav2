@@ -238,8 +238,7 @@ export const SendCard = style(({ balance, channel, classes, ethProvider, history
               onClick={ () => {
                 linkHandler();
               } }
-              size="large"
-              variant="contained"
+              variant="outlined"
               color="primary"
               endIcon={<LinkIcon />}
             >
@@ -260,8 +259,7 @@ export const SendCard = style(({ balance, channel, classes, ethProvider, history
               onClick={() => {
                 paymentHandler();
               }}
-              size="large"
-              variant="contained"
+              variant="outlined"
               color="primary"
               endIcon={<SendIcon />}
             >
@@ -407,7 +405,7 @@ const SendCardModal = ({ amount, classes, closeModal, history, link, paymentStat
           <Button
             disableTouchRipple
             color="primary"
-            variant="outlined"
+            variant="contained"
             size="medium"
             onClick={() => closeModal()}
           >
@@ -421,7 +419,7 @@ const SendCardModal = ({ amount, classes, closeModal, history, link, paymentStat
               color: "#F22424",
               marginLeft: "5%",
             }}
-            variant="outlined"
+            variant="contained"
             size="medium"
             onClick={() => history.push("/")}
           >

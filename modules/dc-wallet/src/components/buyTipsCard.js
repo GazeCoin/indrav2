@@ -250,28 +250,22 @@ class BuyTipsCard extends Component {
           </Grid>
         </Grid>
         <Grid item xs={12}>
-          <Grid container direction="row" alignItems="center" justify="center" spacing={8}>
-            <Grid item xs={6}>
-              <Button
-                className={classes.button}
-                disabled={!!amount.error || !!tips.error}
-                fullWidth
-                onClick={() => {
-                  this.buyTipsHandler();
-                }}
-                size="medium"
-                color="primary"
-                variant="contained"
-              >
-                {buyOrSell + ' TIP TOKENS'}
-              </Button>
-            </Grid>
-          </Grid>
+          <Button
+            className={classes.button}
+            disabled={!!amount.error || !!tips.error}
+            fullWidth
+            onClick={() => {
+              this.buyTipsHandler();
+            }}
+            color="primary"
+            variant="outlined"
+          >
+            {buyOrSell + ' TIP TOKENS'}
+          </Button>
         </Grid>
         <Grid item xs={12}>
           <Button
             variant="outlined"
-            size="medium"
             onClick={() => this.props.history.push("/")}
           >
             Back

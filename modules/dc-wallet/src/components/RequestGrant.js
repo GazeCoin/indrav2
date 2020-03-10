@@ -50,7 +50,6 @@ class RequestGrant extends React.Component {
               fullWidth
               color="primary"
               variant="outlined"
-              size="large"
               onClick={this.handleSubmit}
             >
               Request Credits

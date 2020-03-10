@@ -136,11 +136,14 @@ export const CashoutCard = style(({
             <Button
               disableTouchRipple
               color="primary"
+              variant="outlined"
               className={classes.button}
               fullWidth
               onClick={cashoutEther}
               disabled={!recipient.value}
-              size="small"
+              style={{
+                fontSize: '0.9rem'
+              }}
               endIcon={<img
                 src={EthIcon}
                 style={{ width: "15px", height: "15px" }}
@@ -155,11 +158,13 @@ export const CashoutCard = style(({
               disableTouchRipple
               className={classes.button}
               color="primary"
-              variant="contained"
-              size="small"
+              variant="outlined"
               fullWidth
               onClick={cashoutTokens}
-              disabled={!recipient.value}
+              disabled={ !recipient.value }
+              style={{
+                fontSize: '0.9rem'
+              }}
               endIcon={<img
                 src={DaiIcon}
                 style={{ width: "15px", height: "15px" }}
@@ -175,7 +180,6 @@ export const CashoutCard = style(({
         <Button
           disableTouchRipple
           variant="outlined"
-          size="medium"
           onClick={() => history.push("/")}
         >
           Back

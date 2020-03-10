@@ -10,10 +10,14 @@ const theme = createMuiTheme({
   palette: {
     type: "dark",
     primary: {
-      main: "#3C0E5E",
+      // main: "#3C0E5E",
+      main: "#EF96FE",
     },
     secondary: {
       main: "#101010",
+    },
+    error: {
+      main: '#A90004',
     },
     background: {
       default: '#000000',
@@ -22,7 +26,26 @@ const theme = createMuiTheme({
   },
   typography: {
     useNextVariants: true,
+    button: {
+      fontFamily: 'dreamchannelfontregular',
+      fontWeight: 'bold',
+      fontSize: '1.35rem',
+    }
   },
+  overrides: {
+    MuiButton: {
+      outlined: {
+        color: '#06A500',
+        textShadow: '0 0 4px #06A500',
+        boxShadow: '0 0 4px #06A500',
+      },
+      outlinedPrimary: {
+        color: '#EF96FE',
+        textShadow: '0 0 4px #EF96FD',
+        boxShadow: '0 0 4px #EF96FD',
+      },
+    },
+  }
 });
 
 ReactDOM.render(

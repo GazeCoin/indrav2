@@ -47,44 +47,33 @@ class Onboarding extends React.Component {
     const ethAddress = channel ? channel.freeBalanceAddress : null;
     return (
       <>
-        <Grid
-          container
-          spacing={1}
-          direction="column"
-          style={{ paddingLeft: "2%", paddingRight: "2%", textAlign: "center" }}
+        <Button
+          fullWidth
+          variant="outlined"
+          component={Link1}
+          to={
+            {
+              pathname: "/requestcredit.html",
+              search: "payAddress=" + ethAddress +
+                    "&nftAddress=" + associatedAddress,
+            }
+          /* //Wyre transfer:
+          { pathname: "https://pay.sendwyre.com/purchase",
+                search: "?destCurrency=DAI" +
+                  "&sourceAmount=10" +
+                  "&dest=ethereum:" + ethAddress +
+                  //"&accountId=AC_GQEAQV3A37U" +
+                  //"&accountId=AC_J3QD6WH3B83" +
+                  "&redirectUrl=https://card.gazecoin.xyz"
+              }*/}
         >
-          <Grid item xs={12}>
-            <Button
-              fullWidth
-              variant="outlined"
-              size="large"
-              component={Link1}
-              to={
-                {
-                  pathname: "/requestcredit.html",
-                  search: "payAddress=" + ethAddress +
-                        "&nftAddress=" + associatedAddress,
-                }
-              /* //Wyre transfer:
-              { pathname: "https://pay.sendwyre.com/purchase",
-                    search: "?destCurrency=DAI" +
-                      "&sourceAmount=10" +
-                      "&dest=ethereum:" + ethAddress +
-                      //"&accountId=AC_GQEAQV3A37U" +
-                      //"&accountId=AC_J3QD6WH3B83" +
-                      "&redirectUrl=https://card.gazecoin.xyz"
-                  }*/}
-            >
-              Top Up Credits
-            </Button>
-          </Grid>
-          <Grid item xs={12}>
-            <form id="passcodeForm" onSubmit={this.handleSubmit} hidden >
-              <input id="setPasscode" type="hidden" onChange={this.setPasscode}/>
-              <input id="submitPasscode" type='submit' value='Submit' />
-            </form>
-          </Grid>
-        </Grid>
+          Top Up Credits
+        </Button>
+
+        <form id="passcodeForm" onSubmit={this.handleSubmit} hidden>
+          <input id="setPasscode" type="hidden" onChange={this.setPasscode} />
+          <input id="submitPasscode" type='submit' value='Submit' />
+        </form>
       </>
     );
   }

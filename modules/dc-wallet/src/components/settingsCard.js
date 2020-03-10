@@ -95,7 +95,6 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
             window.close();
             return false;
           }}
-          size="large"
         >
           Support
         </Button>
@@ -108,8 +107,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
             fullWidth
             className={classes.button}
             color="primary"
-            variant="contained"
-            size="large"
+            variant="outlined"
             onClick={() => setShowRecovery(true)}
           >
             Show Backup Phrase
@@ -126,8 +124,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
             fullWidth
             className={classes.button}
             color="primary"
-            variant="contained"
-            size="large"
+            variant="outlined"
             onClick={() => setInputRecovery(true)}
           >
             Import from Backup
@@ -137,7 +134,6 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
             style={{ height: "40px", width: "80%" }}
             color="primary"
             variant="outlined"
-            size="large"
             placeholder="Enter backup phrase and submit"
             value={mnemonic}
             onChange={event => setMnemonic(event.target.value)}
@@ -147,9 +143,9 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
                   <Button
                     disableTouchRipple
                     fullWidth
-                    variant="contained"
+                    variant="outlined"
                     color="primary"
-                    style={{ color: "#FFF", marginRight: "-10%" }}
+                    style={{ marginRight: "-10%" }}
                     onClick={async () => await recoverAddressFromMnemonic()}
                   >
                     <SubmitIcon />
@@ -166,11 +162,10 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
           disableTouchRipple
           fullWidth
           style={{
-            background: "#F22424",
-            border: "1px solid #F22424",
-            color: "#fff",
+            color: '#A90004',
+            textShadow: '0 0 4px #A90004',
+            boxShadow: '0 0 4px #A90004',
           }}
-          size="large"
           onClick={() => setShowWarning(true)}
         >
           Burn Card
@@ -194,7 +189,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
             }}
           >
             <DialogTitle disableTypography>
-              <Typography variant="h5" style={{ color: "#F22424" }}>
+              <Typography variant="h5" style={{ color: "#A90004" }}>
                 Are you sure you want to burn your Card?
               </Typography>
             </DialogTitle>
@@ -210,7 +205,7 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
               ) : (
                 <Grid container alignItems="center" justify="center" direction="column">
                   <Grid item xs={12}>
-                    <DialogContentText variant="body1" style={{ color: "#F22424" }}>
+                    <DialogContentText variant="body1" style={{ color: "#A90004" }}>
                       You will lose access to your funds unless you save your backup phrase!
                     </DialogContentText>
                   </Grid>
@@ -218,13 +213,12 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
                     <DialogActions>
                       <Button
                         disableTouchRipple
+                        variant="outlined"
                         style={{
-                          background: "#F22424",
-                          border: "1px solid #F22424",
-                          color: "#FFF",
+                          color: '#A90004',
+                          textShadow: '0 0 4px #A90004',
+                          boxShadow: '0 0 4px #A90004',
                         }}
-                        variant="contained"
-                        size="small"
                         onClick={async () => await generateNewAddress()}
                       >
                         Burn
@@ -232,13 +226,14 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
                       <Button
                         disableTouchRipple
                         style={{
-                          background: "#F22424",
-                          border: "1px solid #F22424",
-                          color: "#fff",
                           marginLeft: "5%",
                         }}
                         variant="outlined"
-                        size="small"
+                        style={{
+                          color: '#A90004',
+                          textShadow: '0 0 4px #A90004',
+                          boxShadow: '0 0 4px #A90004',
+                        }}
                         onClick={() => setShowWarning(false)}
                       >
                         Cancel
@@ -256,7 +251,6 @@ export const SettingsCard = style(({ classes, setWalletConnext, getWalletConnext
         <Button
           disableTouchRipple
           variant="outlined"
-          size="medium"
           onClick={() => history.push("/")}
         >
           Back

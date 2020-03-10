@@ -75,48 +75,43 @@ export const Home = style(({ balance, swapRate, channel, history, parseQRCode, a
         direction="column"
         style={{ paddingLeft: "2%", paddingRight: "2%", textAlign: "center" }}
       >
-        <Grid item xs={12} style={{ paddingTop: "10%", paddingBottom: '5%' }}>
-          <Grid container spacing={2} direction="row" alignItems="center" justify="center">
-            <Grid item xs={12}>
-              <Button
-                disableTouchRipple
-                fullWidth
-                color="primary"
-                variant="contained"
-                size="large"
-                component={Link}
-                to="/request"
-                endIcon={<ReceiveIcon />}
-              >
-                Receive From Friend
-              </Button>
-            </Grid>
-            <Grid item xs={12}>
-              <Button
-                disableTouchRipple
-                fullWidth
-                color="primary"
-                size="large"
-                variant="contained"
-                component={Link}
-                to="/send"
-                endIcon={<SendIcon />}
-              >
-                Send To Friend
-              </Button>
-            </Grid>
-          </Grid>
+        <Grid item xs={12}>
+          <Button
+            disableTouchRipple
+            fullWidth
+            color="primary"
+            variant="outlined"
+            component={Link}
+            to="/request"
+            endIcon={<ReceiveIcon />}
+          >
+            Receive From Friend
+          </Button>
         </Grid>
-        <Onboarding
-          channel={channel}
-          associatedAddress={associatedAddress}
-        />
+        <Grid item xs={12}>
+          <Button
+            disableTouchRipple
+            fullWidth
+            color="primary"
+            variant="outlined"
+            component={Link}
+            to="/send"
+            endIcon={<SendIcon />}
+          >
+            Send To Friend
+          </Button>
+        </Grid>
+        <Grid item xs={ 12 } style={{ marginTop: '1rem' }}>
+          <Onboarding
+            channel={channel}
+            associatedAddress={associatedAddress}
+          />
+        </Grid>
         <Grid item xs={12}>
           <Button
             disableTouchRipple
             fullWidth
             variant="outlined"
-            size="large"
             component={Link}
             to="/swaptips"
           >
@@ -128,7 +123,6 @@ export const Home = style(({ balance, swapRate, channel, history, parseQRCode, a
             disableTouchRipple
             fullWidth
             variant="outlined"
-            size="large"
             component={Link}
             to="/cashout"
           >
@@ -140,7 +134,6 @@ export const Home = style(({ balance, swapRate, channel, history, parseQRCode, a
             disableTouchRipple
             fullWidth
             variant="outlined"
-            size="large"
             component={Link}
             to="/history"
           >
