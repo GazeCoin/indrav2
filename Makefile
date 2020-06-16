@@ -11,6 +11,7 @@ project=$(shell cat $(dir)/package.json | grep '"name":' | head -n 1 | cut -d '"
 registry=$(shell cat $(dir)/package.json | grep '"registry":' | head -n 1 | cut -d '"' -f 4)
 
 cwd=$(shell pwd)
+wincwd="C:\dev\workspace\indra_6.5.1"
 commit=$(shell git rev-parse HEAD | head -c 8)
 release=$(shell cat package.json | grep '"version"' | head -n 1 | cut -d '"' -f 4)
 solc_version=$(shell cat modules/contracts/package.json | grep '"solc"' | awk -F '"' '{print $$4}')
@@ -22,13 +23,20 @@ backwards_compatible_version=$(shell cat package.json | grep '"backwardsCompatib
 id=$(shell if [[ "`uname`" == "Darwin" ]]; then echo 0:0; else echo "`id -u`:`id -g`"; fi)
 image_cache=$(shell if [[ -n "${GITHUB_WORKFLOW}" ]]; then echo "--cache-from=$(project)_database:$(commit),$(project)_database,$(project)_ethprovider:$(commit),$(project)_ethprovider,$(project)_node:$(commit),$(project)_node,$(project)_proxy:$(commit),$(project)_proxy,$(project)_builder"; else echo ""; fi) # Pool of images to pull cached layers from during docker build steps
 interactive=$(shell if [[ -t 0 && -t 2 ]]; then echo "--interactive"; else echo ""; fi)
+is_win=$(shell if [[ "`uname -a`" =~ .*Microsoft.* ]]; then echo true; else echo false; fi)
+ifeq ($(is_win), true)
+  volcwd=$(wincwd)
+else
+  volcwd=$(cwd)
+endif
+$(shell echo $(volcwd))
 
 ########################################
 # Setup more vars
 
 find_options=-type f -not -path "*/node_modules/*" -not -name "address-book.json" -not -name "*.swp" -not -path "*/.*" -not -path "*/cache/*" -not -path "*/build/*" -not -path "*/dist/*" -not -name "*.log"
 
-docker_run=docker run --name=$(project)_builder $(interactive) --tty --rm --volume=$(cwd):/root $(project)_builder $(id)
+docker_run=docker run --name=$(project)_builder $(interactive) --tty --rm --volume=$(volcwd):/root $(project)_builder $(id)
 
 startTime=.flags/.startTime
 totalTime=.flags/.totalTime
@@ -206,9 +214,11 @@ builder: $(shell find ops/builder)
 
 node-modules: builder package.json $(shell ls modules/*/package.json)
 	$(log_start)
-	$(docker_run) "lerna bootstrap --hoist --no-progress"
+	$(docker_run) "lerna bootstrap --hoist"
+	echo 'lerna done'
 	# rm below hack once this PR gets merged: https://github.com/EthWorks/Waffle/pull/205
 	$(docker_run) "sed -i 's|{ input }|{ input, maxBuffer: 1024 * 1024 * 4 }|' node_modules/@ethereum-waffle/compiler/dist/cjs/compileNative.js"
+	echo 'sed done'
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 
 py-requirements: builder docs/requirements.txt

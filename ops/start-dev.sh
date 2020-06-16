@@ -4,6 +4,8 @@ set -e
 dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 project="`cat $dir/../package.json | grep '"name":' | head -n 1 | cut -d '"' -f 4`"
 
+echo 'start-dev.sh '$project
+
 # Turn on swarm mode if it's not already on
 docker swarm init 2> /dev/null || true
 
@@ -107,6 +109,13 @@ redis_image="redis:5-alpine"
 ####################
 # Deploy according to above configuration
 
+# Detect Windows
+if [[ "`pwd`" =~ /mnt/c/(.*) ]]
+then home_dir="//c/${BASH_REMATCH[1]}"
+else home_dir="`pwd`"
+fi
+echo "home_dir=$home_dir"
+
 if [[ "$INDRA_UI" == "headless" ]]
 then
   webserver_service=""
@@ -147,7 +156,7 @@ else
     networks:
       - '$project'
     volumes:
-      - '`pwd`:/root'
+      - '${home_dir}:/root'
     working_dir: '$webserver_working_dir'
   "
 fi
@@ -184,6 +193,7 @@ then
   echo "Created ATTACHABLE network with id $id"
 fi
 
+export COMPOSE_CONVERT_WINDOWS_PATHS=1
 mkdir -p /tmp/$project
 cat - > /tmp/$project/docker-compose.yml <<EOF
 version: '3.4'
@@ -234,7 +244,7 @@ services:
     secrets:
       - '${project}_database_dev'
     volumes:
-      - '`pwd`:/root'
+      - ${home_dir}:/root
 
   ethprovider:
     image: '$ethprovider_image'
@@ -247,7 +257,7 @@ services:
     ports:
       - '8545:8545'
     volumes:
-      - '`pwd`:/root'
+      - '${home_dir}:/root'
       - 'chain_dev:/data'
 
   database:
