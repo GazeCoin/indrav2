@@ -1,4 +1,3 @@
-import { HASHLOCK_TRANSFER_STATE_TIMEOUT } from "@connext/apps";
 import {
   HashLockTransferAppName,
   HashLockTransferAppState,
@@ -6,38 +5,38 @@ import {
   Address,
   Bytes32,
 } from "@connext/types";
-import { bigNumberifyJson, getSignerAddressFromPublicIdentifier, stringify } from "@connext/utils";
+import { bigNumberifyJson } from "@connext/utils";
 import { Injectable } from "@nestjs/common";
-import { HashZero, Zero } from "ethers/constants";
+import { constants } from "ethers";
 
 import { CFCoreService } from "../cfCore/cfCore.service";
-import { ChannelRepository } from "../channel/channel.repository";
-import { ChannelService } from "../channel/channel.service";
 import { LoggerService } from "../logger/logger.service";
-import { TIMEOUT_BUFFER } from "../constants";
 import { ConfigService } from "../config/config.service";
-import { DepositService } from "../deposit/deposit.service";
 import { AppType, AppInstance } from "../appInstance/appInstance.entity";
 import { HashlockTransferRepository } from "./hashlockTransfer.repository";
+
+const { HashZero } = constants;
 
 const appStatusesToHashLockTransferStatus = (
   currentBlockNumber: number,
   senderApp: AppInstance<typeof HashLockTransferAppName>,
   receiverApp?: AppInstance<typeof HashLockTransferAppName>,
 ): HashLockTransferStatus | undefined => {
-  if (!senderApp) {
+  if (!receiverApp) {
     return undefined;
   }
-  const latestState = bigNumberifyJson(senderApp.latestState) as HashLockTransferAppState;
+  const latestState = bigNumberifyJson(receiverApp.latestState) as HashLockTransferAppState;
   const { expiry: senderExpiry } = latestState;
   const isSenderExpired = senderExpiry.lt(currentBlockNumber);
-  const isReceiverExpired = !receiverApp ? false : latestState.expiry.lt(currentBlockNumber);
+  const isReceiverExpired = !senderApp ? false : latestState.expiry.lt(currentBlockNumber);
   // pending iff no receiver app + not expired
-  if (!receiverApp) {
+  if (!senderApp) {
     return isSenderExpired ? HashLockTransferStatus.EXPIRED : HashLockTransferStatus.PENDING;
   } else if (
+    senderApp?.type === AppType.UNINSTALLED ||
+    receiverApp?.type === AppType.UNINSTALLED ||
     senderApp.latestState.preImage !== HashZero ||
-    receiverApp.latestState.preImage !== HashZero
+    latestState.preImage !== HashZero
   ) {
     // iff sender uninstalled, payment is unlocked
     return HashLockTransferStatus.COMPLETED;
@@ -52,7 +51,11 @@ const appStatusesToHashLockTransferStatus = (
     // do this last bc could be retrieving historically
     return HashLockTransferStatus.PENDING;
   } else {
-    throw new Error(`Cound not determine hash lock transfer status`);
+    throw new Error(
+      `Could not determine hash lock transfer status. Sender app type: ${
+        senderApp && senderApp.type
+      }, receiver app type: ${receiverApp && receiverApp.type}`,
+    );
   }
 };
 
@@ -60,133 +63,11 @@ const appStatusesToHashLockTransferStatus = (
 export class HashLockTransferService {
   constructor(
     private readonly cfCoreService: CFCoreService,
-    private readonly channelService: ChannelService,
-    private readonly depositService: DepositService,
     private readonly configService: ConfigService,
     private readonly log: LoggerService,
-    private readonly channelRepository: ChannelRepository,
     private readonly hashlockTransferRepository: HashlockTransferRepository,
   ) {
     this.log.setContext("HashLockTransferService");
-  }
-
-  async installHashLockTransferReceiverApp(
-    senderIdentifier: string,
-    receiverIdentifier: string,
-    appState: HashLockTransferAppState,
-    assetId: string,
-    meta: any = {},
-  ): Promise<{ appIdentityHash: string }> {
-    this.log.info(
-      `installHashLockTransferReceiverApp started: ${stringify({
-        senderIdentifier,
-        receiverIdentifier,
-        appState,
-        assetId,
-        meta,
-      })}`,
-    );
-    const receiverChannel = await this.channelRepository.findByUserPublicIdentifierOrThrow(
-      receiverIdentifier,
-    );
-
-    // sender amount
-    const amount = appState.coinTransfers[0].amount;
-    const expiry = appState.expiry.sub(TIMEOUT_BUFFER);
-    if (expiry.lte(Zero)) {
-      throw new Error(
-        `Cannot resolve hash lock transfer with 0 or negative expiry: ${expiry.toString()}`,
-      );
-    }
-    const provider = this.configService.getEthProvider();
-    const currBlock = await provider.getBlockNumber();
-    if (expiry.lt(currBlock)) {
-      throw new Error(
-        `Cannot resolve hash lock transfer with expired expiry: ${expiry.toString()}, block: ${currBlock}`,
-      );
-    }
-
-    const existing = await this.findReceiverAppByLockHashAndAssetId(appState.lockHash, assetId);
-    if (existing) {
-      const result = { appIdentityHash: existing.identityHash };
-      this.log.warn(`Found existing hashlock transfer app, returning: ${stringify(result)}`);
-      return result;
-    }
-
-    const freeBalanceAddr = this.cfCoreService.cfCore.signerAddress;
-
-    const receiverFreeBal = await this.cfCoreService.getFreeBalance(
-      receiverIdentifier,
-      receiverChannel.multisigAddress,
-      assetId,
-    );
-    if (receiverFreeBal[freeBalanceAddr].lt(amount)) {
-      const deposit = await this.channelService.getCollateralAmountToCoverPaymentAndRebalance(
-        receiverIdentifier,
-        assetId,
-        amount,
-        receiverFreeBal[freeBalanceAddr],
-      );
-      // request collateral and wait for deposit to come through
-      const depositReceipt = await this.depositService.deposit(
-        receiverChannel,
-        deposit,
-        assetId,
-      );
-      if (!depositReceipt) {
-        throw new Error(
-          `Could not deposit sufficient collateral to resolve hash lock transfer app for reciever: ${receiverIdentifier}`,
-        );
-      }
-    }
-
-    const initialState: HashLockTransferAppState = {
-      coinTransfers: [
-        {
-          amount,
-          to: freeBalanceAddr,
-        },
-        {
-          amount: Zero,
-          to: getSignerAddressFromPublicIdentifier(receiverIdentifier),
-        },
-      ],
-      lockHash: appState.lockHash,
-      preImage: HashZero,
-      expiry,
-      finalized: false,
-    };
-
-    const receiverAppInstallRes = await this.cfCoreService.proposeAndWaitForInstallApp(
-      receiverChannel,
-      initialState,
-      amount,
-      assetId,
-      Zero,
-      assetId,
-      HashLockTransferAppName,
-      { ...meta, sender: senderIdentifier },
-      HASHLOCK_TRANSFER_STATE_TIMEOUT,
-    );
-
-    if (!receiverAppInstallRes || !receiverAppInstallRes.appIdentityHash) {
-      throw new Error(`Could not install app on receiver side.`);
-    }
-
-    const response = {
-      appIdentityHash: receiverAppInstallRes.appIdentityHash,
-    };
-
-    // kick off a rebalance before finishing
-    this.channelService.rebalance(receiverChannel, assetId);
-
-    this.log.info(
-      `installHashLockTransferReceiverApp from ${senderIdentifier} to ${receiverIdentifier} assetId ${assetId} completed: ${JSON.stringify(
-        response,
-      )}`,
-    );
-
-    return response;
   }
 
   async findSenderAndReceiverAppsWithStatus(

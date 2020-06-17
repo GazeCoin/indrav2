@@ -14,7 +14,6 @@ cwd=$(shell pwd)
 wincwd="C:\dev\workspace\indra_6.5.1"
 commit=$(shell git rev-parse HEAD | head -c 8)
 release=$(shell cat package.json | grep '"version"' | head -n 1 | cut -d '"' -f 4)
-solc_version=$(shell cat modules/contracts/package.json | grep '"solc"' | awk -F '"' '{print $$4}')
 
 # version that will be tested against for backwards compatibility checks
 backwards_compatible_version=$(shell cat package.json | grep '"backwardsCompatibleWith"' | head -n 1 | cut -d '"' -f 4)
@@ -48,7 +47,7 @@ log_finish=@echo $$((`date "+%s"` - `cat $(startTime)`)) > $(totalTime); rm $(st
 
 default: dev
 all: dev staging release
-dev: database proxy node test-runner
+dev: bot database proxy node test-runner
 staging: database ethprovider proxy node-staging test-runner-staging webserver
 release: database ethprovider proxy node-release test-runner-release webserver
 
@@ -73,6 +72,12 @@ start-test-release:
 start-prod:
 	bash ops/start-prod.sh
 
+start-bot: bot
+	bash ops/test/bot.sh 2 1000
+
+start-bot-farm: bot
+	bash ops/test/bot.sh 10 1000
+
 stop:
 	bash ops/stop.sh
 
@@ -96,7 +101,8 @@ clean: stop
 	rm -rf node_modules/@connext modules/*/node_modules/@connext
 	rm -rf node_modules/@walletconnect modules/*/node_modules/@walletconnect
 	rm -rf modules/*/node_modules/*/.git
-	rm -rf modules/*/build modules/*/dist docs/build
+	rm -rf modules/*/node_modules/.bin
+	rm -rf modules/contracts/artifacts modules/*/build modules/*/dist docs/build
 	rm -rf modules/*/.*cache* modules/*/node_modules/.cache modules/contracts/cache/*.json
 
 quick-reset:
@@ -107,14 +113,15 @@ quick-reset:
 	bash ops/db.sh 'truncate table onchain_transaction cascade;'
 	bash ops/db.sh 'truncate table rebalance_profile cascade;'
 	bash ops/db.sh 'truncate table app_instance cascade;'
+	bash ops/redis.sh 'flushall'
 	touch modules/node/src/main.ts
 
 reset: stop
 	docker container prune -f
-	docker volume rm `docker volume ls -q -f name=$(project)_database_test_*` 2> /dev/null || true
-	docker volume rm $(project)_database_dev 2> /dev/null || true
+	docker network rm $(project) $(project)_cf_tester $(project)_node_tester $(project)_test_store 2> /dev/null || true
 	docker secret rm $(project)_database_dev 2> /dev/null || true
-	docker volume rm $(project)_chain_dev 2> /dev/null || true
+	docker volume rm $(project)_chain_dev $(project)_database_dev  2> /dev/null || true
+	docker volume rm `docker volume ls -q -f name=$(project)_database_test_*` 2> /dev/null || true
 	rm -rf .flags/deployed-contracts
 
 push-commit:
@@ -145,6 +152,12 @@ build-report:
 lint:
 	bash ops/lint.sh
 
+publish-contracts:
+	bash ops/npm-publish.sh contracts
+
+publish-packages:
+	bash ops/npm-publish.sh
+
 dls:
 	@docker service ls
 	@echo "====="
@@ -158,6 +171,12 @@ watch: watch-integration
 
 test-backwards-compatibility: pull-backwards-compatible
 	bash ops/test/integration.sh $(backwards_compatible_version)
+
+test-bot: bot
+	bash ops/test/bot.sh 2 1000 10
+
+test-bot-farm: bot
+	bash ops/test/bot.sh 10 1000 10
 
 test-cf: cf-core
 	bash ops/test/cf.sh
@@ -175,7 +194,7 @@ test-integration:
 	bash ops/test/integration.sh
 
 test-node: node
-	bash ops/test/node.sh --runInBand --forceExit
+	bash ops/test/node.sh
 
 test-store: store
 	bash ops/test/store.sh
@@ -209,16 +228,12 @@ watch-node: node
 
 builder: $(shell find ops/builder)
 	$(log_start)
-	docker build --file ops/builder/Dockerfile --build-arg SOLC_VERSION=$(solc_version) $(image_cache) --tag $(project)_builder ops/builder
+	docker build --file ops/builder/Dockerfile $(image_cache) --tag $(project)_builder ops/builder
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 
 node-modules: builder package.json $(shell ls modules/*/package.json)
 	$(log_start)
-	$(docker_run) "lerna bootstrap --hoist"
-	echo 'lerna done'
-	# rm below hack once this PR gets merged: https://github.com/EthWorks/Waffle/pull/205
-	$(docker_run) "sed -i 's|{ input }|{ input, maxBuffer: 1024 * 1024 * 4 }|' node_modules/@ethereum-waffle/compiler/dist/cjs/compileNative.js"
-	echo 'sed done'
+	$(docker_run) "lerna bootstrap --hoist --no-progress"
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 
 py-requirements: builder docs/requirements.txt
@@ -234,7 +249,7 @@ docs: documentation
 documentation: py-requirements $(shell find docs $(find_options))
 	$(log_start)
 	$(docker_run) "rm -rf docs/build"
-	$(docker_run) "source .pyEnv/bin/activate && cd docs && sphinx-build -b html -d build/doctrees . build/html"
+	$(docker_run) "source .pyEnv/bin/activate && cd docs && sphinx-build -b html -d build/doctrees ./src build/html"
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 
 ########################################
@@ -287,6 +302,11 @@ client: types utils channel-provider messaging store contracts cf-core apps $(sh
 	$(docker_run) "cd modules/client && npm run build"
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 
+bot: types utils channel-provider messaging store contracts cf-core apps client $(shell find modules/bot $(find_options))
+	$(log_start)
+	$(docker_run) "cd modules/bot && npm run build"
+	$(log_finish) && mv -f $(totalTime) .flags/$@
+
 node: types utils messaging store contracts cf-core apps client $(shell find modules/node $(find_options))
 	$(log_start)
 	$(docker_run) "cd modules/node && npm run build && touch src/main.ts"
@@ -318,7 +338,7 @@ database: $(shell find ops/database $(find_options))
 
 ethprovider: contracts $(shell find modules/contracts/ops $(find_options))
 	$(log_start)
-	docker build --file modules/contracts/ops/Dockerfile $(image_cache) --tag $(project)_ethprovider .
+	docker build --file modules/contracts/ops/Dockerfile $(image_cache) --tag $(project)_ethprovider modules/contracts
 	docker tag $(project)_ethprovider $(project)_ethprovider:$(commit)
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 

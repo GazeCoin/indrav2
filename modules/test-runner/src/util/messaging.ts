@@ -3,19 +3,20 @@ import {
   ConnextEventEmitter,
   IMessagingService,
   MessagingConfig,
-  Message,
+  GenericMessage,
   VerifyNonceDtoType,
   IChannelSigner,
   ProtocolParam,
   ProtocolName,
   ProtocolNames,
 } from "@connext/types";
-import { ChannelSigner, ColorfulLogger, stringify, isBN } from "@connext/utils";
+import { ChannelSigner, ColorfulLogger, stringify } from "@connext/utils";
 import axios, { AxiosResponse } from "axios";
 import { Wallet } from "ethers";
 
 import { env } from "./env";
 import { combineObjects } from "./misc";
+import { expect } from "./assertions";
 
 const log = new ColorfulLogger("Messaging", env.logLevel);
 
@@ -292,9 +293,9 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
 
   ////////////////////////////////////////
   // IMessagingService Methods
-  onReceive(subject: string, callback: (msg: Message) => void): Promise<void> {
+  onReceive(subject: string, callback: (msg: GenericMessage) => void): Promise<void> {
     // return connection callback
-    return this.connection.onReceive(subject, (msg: Message) => {
+    return this.connection.onReceive(subject, (msg: GenericMessage) => {
       const shouldContinue = this.emitEventAndIncrementApiCount(RECEIVED, {
         subject,
         data: msg,
@@ -302,7 +303,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
       // check if there is a high level limit on messages received
       if (!shouldContinue) {
         log.warn(
-          `Reached API ceiling, refusing to process any more messages. Received ${this.apiCounter[RECEIVED]} total messages`,
+          `Reached API ceiling, refusing to process any more messages. Received ${this.apiCounter[RECEIVED]} total message`,
         );
         return Promise.resolve();
       }
@@ -315,7 +316,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
       }
       const canContinue = this.incrementProtocolCount(protocol, msg, RECEIVED);
       if (!canContinue) {
-        const msg = `Refusing to process any more messages, ceiling for ${protocol} has been reached. ${stringify(
+        const msg = `Refusing to process any more messages, ceiling for ${protocol} has been reached (received). ${stringify(
           this.protocolCounter[protocol],
         )}`;
         log.warn(msg);
@@ -327,7 +328,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
     });
   }
 
-  send(to: string, msg: Message): Promise<void> {
+  send(to: string, msg: GenericMessage): Promise<void> {
     const shouldContinue = this.emitEventAndIncrementApiCount(SEND, {
       subject: to,
       data: msg,
@@ -335,7 +336,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
     // check if there is a high level limit on messages received
     if (!shouldContinue) {
       log.warn(
-        `Reached API ceiling, refusing to process any more messages. Seny ${this.apiCounter[SEND]} total messages`,
+        `Reached API ceiling, refusing to process any more messages. Sent ${this.apiCounter[SEND]} total messages`,
       );
       return Promise.resolve();
     }
@@ -349,7 +350,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
     }
     const canContinue = this.incrementProtocolCount(protocol, msg, SEND);
     if (!canContinue) {
-      const msg = `Refusing to process any more messages, ceiling for ${protocol} has been reached. ${stringify(
+      const msg = `Refusing to process any more messages, ceiling for ${protocol} has been reached (send). ${stringify(
         this.protocolCounter[protocol],
       )}`;
       log.warn(msg);
@@ -392,8 +393,8 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
     return this.connection.request(subject, timeout, data);
   }
 
-  subscribe(subject: string, callback: (msg: Message) => void): Promise<void> {
-    return this.connection.subscribe(subject, (msg: Message) => {
+  subscribe(subject: string, callback: (msg: GenericMessage) => void): Promise<void> {
+    return this.connection.subscribe(subject, (msg: GenericMessage) => {
       this.emitEventAndIncrementApiCount(SUBSCRIBE, { subject, data: msg } as MessagingEventData);
       return callback(msg);
     });
@@ -419,17 +420,21 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
   // messaging limits have been reached.
   private incrementProtocolCount(
     protocol: ProtocolName,
-    msg: Message,
+    msg: GenericMessage,
     apiType: typeof SEND | typeof RECEIVED,
+    shouldLog: boolean = false,
   ): boolean {
+    const logIf = (msg: string) => {
+      if (shouldLog) {
+        log.info(msg);
+      }
+    };
     // get the params from the message and our limits
     const msgParams = getParamsFromData(msg);
     const { ceiling: indexedCeiling, params } = this.protocolLimits[protocol];
 
-    const ceiling =
-      (indexedCeiling || {})[apiType] === undefined || (indexedCeiling || {})[apiType] === null
-        ? NO_LIMIT
-        : indexedCeiling[apiType];
+    const exists = (x) => x !== undefined && x !== null;
+    const ceiling = exists(indexedCeiling[apiType]) ? indexedCeiling[apiType] : NO_LIMIT;
 
     const evaluateCeiling = () => {
       if (this.protocolCounter[protocol][apiType] >= ceiling) {
@@ -439,30 +444,30 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
       return this.protocolCounter[protocol][apiType] < ceiling;
     };
 
-    if (!params || !msgParams) {
+    logIf(`protocol: ${protocol}`);
+    logIf(`ceiling: ${ceiling}`);
+    logIf(`indexedCeiling[${apiType}]: ${stringify(indexedCeiling[apiType])}`);
+
+    if (!params) {
       // nothing specified, applies to all
       return evaluateCeiling();
     }
 
-    let containsVal = false;
-    Object.entries(msgParams).forEach(([key, value]) => {
-      if (!params[key]) {
-        return;
-      }
-      let unnestedVal = value as any;
-      let unnestedComp = params[key];
-      while (typeof unnestedVal === "object" && !isBN(unnestedVal)) {
-        const [key] = Object.entries(unnestedVal as object).pop() as any;
-        unnestedVal = unnestedVal[key];
-        unnestedComp = unnestedComp[key];
-      }
-      containsVal = unnestedVal.toString() === unnestedComp.toString();
-    });
-    if (containsVal) {
-      return evaluateCeiling();
+    if (params && !msgParams) {
+      // params specified but none in message, dont evaluate
+      // ceiling and continue execution. dont increment counts.
+      return true;
     }
-    // otherwise dont count and return true (msg does not include)
-    // user-specificed params
-    return true;
+
+    try {
+      expect(msgParams).to.containSubset(params);
+      const ret = evaluateCeiling();
+      logIf(`evaluated, should continue: ${ret}`);
+      // does contain params
+      return evaluateCeiling();
+    } catch (e) {
+      // does not contain params, ignore
+      return true;
+    }
   }
 }

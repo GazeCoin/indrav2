@@ -1,8 +1,17 @@
 #!/usr/bin/env bash
 set -e
 
+dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
+project="`cat $dir/../package.json | grep '"name":' | head -n 1 | cut -d '"' -f 4`"
+registry="`cat $dir/../package.json | grep '"registry":' | head -n 1 | cut -d '"' -f 4`"
+
 # turn on swarm mode if it's not already on
 docker swarm init 2> /dev/null || true
+
+# Deploy with an attachable network in test-mode
+# Delete/recreate the network first to delay docker network slowdowns that have been happening
+docker network rm $project 2> /dev/null || true
+docker network create --attachable --driver overlay $project 2> /dev/null || true
 
 ####################
 # Load env vars
@@ -67,11 +76,7 @@ export INDRA_NATS_JWT_SIGNER_PUBLIC_KEY=`
 ####################
 # Internal Config
 
-dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-project="`cat $dir/../package.json | grep '"name":' | head -n 1 | cut -d '"' -f 4`"
-registry="`cat $dir/../package.json | grep '"registry":' | head -n 1 | cut -d '"' -f 4`"
-
-ganache_chain_id="4447"
+ganache_chain_id="1337"
 node_port="8080"
 number_of_services="7" # NOTE: Gotta update this manually when adding/removing services :(
 
@@ -110,9 +115,12 @@ then
   db_volume="database_test_`date +%y%m%d_%H%M%S`"
   db_secret="${project}_database_test"
   new_secret "$db_secret" "$project"
-  db_port="ports:
-      - '5432:5432'
-  "
+  network="networks:
+      - '$project'
+    "
+  stack_network="networks:
+  $project:
+    external: true"
 else
   db_volume="database"
   db_secret="${project}_database"
@@ -204,12 +212,15 @@ then
       - '8545:8545'
     volumes:
       - '$eth_volume/data'
+    $network
   "
   INDRA_ETH_PROVIDER="http://ethprovider:8545"
   MODE=${INDRA_MODE#*-} bash ops/deploy-contracts.sh
 fi
 
 allowed_swaps='[{"from":"'"$token_address"'","to":"0x0000000000000000000000000000000000000000","priceOracleType":"UNISWAP"},{"from":"0x0000000000000000000000000000000000000000","to":"'"$token_address"'","priceOracleType":"UNISWAP"}]'
+
+supported_tokens="$token_address,0x0000000000000000000000000000000000000000"
 
 ########################################
 ## Deploy according to configuration
@@ -220,6 +231,8 @@ mkdir -p `pwd`/ops/database/snapshots
 mkdir -p /tmp/$project
 cat - > /tmp/$project/docker-compose.yml <<EOF
 version: '3.4'
+
+$stack_network
 
 secrets:
   $db_secret:
@@ -243,7 +256,6 @@ services:
       ETH_PROVIDER_URL: '$INDRA_ETH_PROVIDER'
       MESSAGING_TCP_URL: 'nats:4222'
       MESSAGING_WS_URL: 'nats:4221'
-      MODE: 'prod'
       NODE_URL: 'node:8080'
       WEBSERVER_URL: 'webserver:80'
     logging:
@@ -257,9 +269,11 @@ services:
       - '4222:4222'
     volumes:
       - 'certs:/etc/letsencrypt'
+    $network
 
   webserver:
     image: '$webserver_image'
+    $network
 
   node:
     image: '$node_image'
@@ -267,6 +281,7 @@ services:
     environment:
       INDRA_ADMIN_TOKEN: '$INDRA_ADMIN_TOKEN'
       INDRA_ALLOWED_SWAPS: '$allowed_swaps'
+      INDRA_SUPPORTED_TOKENS: '$supported_tokens'
       INDRA_ETH_CONTRACT_ADDRESSES: '$eth_contract_addresses'
       INDRA_ETH_MNEMONIC_FILE: '/run/secrets/$eth_mnemonic_name'
       INDRA_ETH_RPC_URL: '$INDRA_ETH_PROVIDER'
@@ -290,6 +305,7 @@ services:
     secrets:
       - '$db_secret'
       - '$eth_mnemonic_name'
+    $network
 
   database:
     image: '$database_image'
@@ -311,7 +327,7 @@ services:
     volumes:
       - '$db_volume:/var/lib/postgresql/data'
       - '`pwd`/ops/database/snapshots:/root/snapshots'
-    $db_port
+    $network
 
   nats:
     image: '$nats_image'
@@ -322,9 +338,11 @@ services:
       driver: 'json-file'
       options:
           max-size: '100m'
+    $network
 
   redis:
     image: '$redis_image'
+    $network
 
   logdna:
     image: '$logdna_image'

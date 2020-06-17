@@ -1,14 +1,14 @@
 import { getLocalStore } from "@connext/store";
+import { ConditionalTransferTypes, IConnextClient } from "@connext/types";
 import {
-  ConditionalTransferTypes,
-  IConnextClient,
-} from "@connext/types";
-import { ChannelSigner, getRandomBytes32 } from "@connext/utils";
-import { ContractFactory, Wallet } from "ethers";
-import { AddressZero } from "ethers/constants";
+  getRandomBytes32,
+  getRandomPrivateKey,
+  getPublicKeyFromPrivateKey,
+  getPublicIdentifierFromPublicKey,
+  delay,
+} from "@connext/utils";
+import { ContractFactory, Wallet, constants } from "ethers";
 import tokenArtifacts from "@openzeppelin/contracts/build/contracts/ERC20Mintable.json";
-import { before } from "mocha";
-import { Client } from "ts-nats";
 
 import {
   AssetOptions,
@@ -26,22 +26,18 @@ import {
   withdrawFromChannel,
   ZERO_ZERO_ONE_ETH,
 } from "../util";
-import { getNatsClient } from "../util/nats";
+
+const { AddressZero } = constants;
 
 describe("Async Transfers", () => {
   let clientA: IConnextClient;
   let clientB: IConnextClient;
   let tokenAddress: string;
-  let nats: Client;
-
-  before(async () => {
-    nats = getNatsClient();
-  });
 
   beforeEach(async () => {
     clientA = await createClient({ id: "A" });
     clientB = await createClient({ id: "B" });
-    tokenAddress = clientA.config.contractAddresses.Token;
+    tokenAddress = clientA.config.contractAddresses.Token!;
   });
 
   afterEach(async () => {
@@ -53,7 +49,7 @@ describe("Async Transfers", () => {
     const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
     await fundChannel(clientA, transfer.amount, transfer.assetId);
     await requestCollateral(clientB, transfer.assetId);
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
   });
 
   it("happy case: client A transfers eth to client B through node with localstorage", async () => {
@@ -61,29 +57,55 @@ describe("Async Transfers", () => {
     const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
     await fundChannel(localStorageClient, transfer.amount, transfer.assetId);
     await requestCollateral(clientB, transfer.assetId);
-    await asyncTransferAsset(localStorageClient, clientB, transfer.amount, transfer.assetId, nats);
+    await asyncTransferAsset(localStorageClient, clientB, transfer.amount, transfer.assetId);
   });
 
   it("happy case: client A transfers tokens to client B through node", async () => {
     const transfer: AssetOptions = { amount: TOKEN_AMOUNT, assetId: tokenAddress };
     await fundChannel(clientA, transfer.amount, transfer.assetId);
     await clientB.requestCollateral(transfer.assetId);
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
+  });
+
+  it("happy case: client A transfers eth to offline client through node", async () => {
+    const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
+    await fundChannel(clientA, transfer.amount, transfer.assetId);
+
+    const receiverPk = getRandomPrivateKey();
+    let receiver = await createClient({ id: "C", signer: receiverPk });
+    await requestCollateral(receiver, transfer.assetId);
+    await receiver.messaging.disconnect();
+    receiver.off();
+    const paymentId = getRandomBytes32();
+    await clientA.transfer({
+      amount: transfer.amount.toString(),
+      assetId: transfer.assetId,
+      recipient: receiver.publicIdentifier,
+      paymentId,
+    });
+    receiver = await createClient({ id: "C", signer: receiverPk });
+    await delay(5000);
+
+    const { [receiver.signerAddress]: receiverFreeBalance } = await receiver.getFreeBalance(
+      transfer.assetId,
+    );
+    expect(receiverFreeBalance).to.eq(transfer.amount);
   });
 
   it("happy case: client A successfully transfers to an address that doesn’t have a channel", async () => {
-    const receiverSigner = new ChannelSigner(
-      Wallet.createRandom().privateKey,
-      ethProvider.connection.url,
+    const receiverPk = getRandomPrivateKey();
+    const receiverIdentifier = getPublicIdentifierFromPublicKey(
+      getPublicKeyFromPrivateKey(receiverPk),
     );
     await fundChannel(clientA, ETH_AMOUNT_SM, tokenAddress);
     await clientA.transfer({
       amount: ETH_AMOUNT_SM.toString(),
       assetId: tokenAddress,
-      recipient: receiverSigner.publicIdentifier,
+      recipient: receiverIdentifier,
     });
-    const receiverClient = await createClient({ signer: receiverSigner }, false);
-    expect(receiverClient.publicIdentifier).to.eq(receiverSigner.publicIdentifier);
+    const receiverClient = await createClient({ signer: receiverPk, id: "R" }, false);
+    await delay(5000);
+    expect(receiverClient.publicIdentifier).to.eq(receiverIdentifier);
     const freeBalance = await receiverClient.getFreeBalance(tokenAddress);
     expect(freeBalance[receiverClient.signerAddress]).to.be.above(0);
     receiverClient.messaging.disconnect();
@@ -93,11 +115,11 @@ describe("Async Transfers", () => {
     const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
     await fundChannel(clientA, ETH_AMOUNT_MD, transfer.assetId);
     await requestCollateral(clientB, transfer.assetId);
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
     await withdrawFromChannel(clientA, ZERO_ZERO_ONE_ETH, AddressZero);
     /*
       // @ts-ignore
@@ -138,14 +160,14 @@ describe("Async Transfers", () => {
     const receiverBal = await clientB.getFreeBalance(transfer.assetId);
     expect(receiverBal[clientB.nodeSignerAddress].lt(transfer.amount)).to.be.true;
 
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
   });
 
   it("client A transfers tokens to client B without collateralizing", async () => {
     const transfer: AssetOptions = { amount: TOKEN_AMOUNT, assetId: tokenAddress };
     await fundChannel(clientA, transfer.amount, transfer.assetId);
 
-    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
+    await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
   });
 
   it("Bot A tries to transfer a negative amount", async () => {
@@ -160,7 +182,7 @@ describe("Async Transfers", () => {
         assetId: tokenAddress,
         recipient: clientB.publicIdentifier,
       }),
-    ).to.be.rejectedWith(`invalid number value`);
+    ).to.be.rejectedWith(`Will not accept transfer install where initiator deposit is <= 0`);
   });
 
   it("Bot A tries to transfer with an invalid token address", async () => {
@@ -219,7 +241,7 @@ describe("Async Transfers", () => {
         assetId: tokenAddress,
         recipient,
       }),
-    ).to.be.rejectedWith(`Invalid public identifier`);
+    ).to.be.rejectedWith(`Invalid checksum`);
   });
 
   it("Bot A tries to transfer an amount greater than they have in their free balance", async () => {
@@ -230,10 +252,11 @@ describe("Async Transfers", () => {
         assetId: tokenAddress,
         recipient: clientB.publicIdentifier,
       }),
-    ).to.be.rejectedWith(`Install failed.`);
+    ).to.be.rejectedWith(`Insufficient funds.`);
   });
 
-  it("Bot A tries to transfer with a paymentId that is not 32 bytes", async () => {
+  // this doesnt really matter anymore since its not encoded in the state
+  it.skip("Bot A tries to transfer with a paymentId that is not 32 bytes", async () => {
     await fundChannel(clientA, ETH_AMOUNT_SM, tokenAddress);
 
     const paymentId = "nope";
@@ -262,11 +285,11 @@ describe("Async Transfers", () => {
         preImage,
         recipient: clientB.publicIdentifier,
       }),
-    ).to.be.rejectedWith(`Invalid hex string`);
+    ).to.be.rejectedWith(`invalid arrayify value`);
   });
 
   it("Experimental: Average latency of 10 async transfers with Eth", async () => {
-    let runTime: number[] = [];
+    const runTime: number[] = [];
     let sum = 0;
     const numberOfRuns = 5;
     const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
@@ -274,7 +297,7 @@ describe("Async Transfers", () => {
     await requestCollateral(clientB, transfer.assetId);
     for (let i = 0; i < numberOfRuns; i++) {
       const start = Date.now();
-      await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId, nats);
+      await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
       runTime[i] = Date.now() - start;
       console.log(`Run: ${i}, Runtime: ${runTime[i]}`);
       sum = sum + runTime[i];

@@ -1,12 +1,14 @@
-import { JsonRpcProvider } from "ethers/providers";
+import { providers } from "ethers";
+import EventEmitter from "eventemitter3";
 
 import { INodeApiClient } from "./api";
 import { Address, DecString, PublicIdentifier, PublicKey, UrlString } from "./basic";
 import { IChannelSigner } from "./crypto";
-import { ConnextEventEmitter } from "./events";
+import { EventName } from "./events";
 import { ILoggerService } from "./logger";
 import { MethodNames } from "./methods";
-import { WithdrawalMonitorObject, IClientStore } from "./store";
+import { JsonRpcRequest } from "./rpc";
+import { WithdrawalMonitorObject, IStoreService } from "./store";
 import { StateChannelJSON } from "./state";
 import { enumify } from "./utils";
 import {
@@ -41,24 +43,20 @@ export type ChannelProviderConfig = {
 };
 
 export interface CFChannelProviderOptions {
-  ethProvider: JsonRpcProvider;
+  ethProvider: providers.JsonRpcProvider;
   signer: IChannelSigner;
   node: INodeApiClient;
   logger?: ILoggerService;
-  store: IClientStore;
+  store: IStoreService;
 }
-
-export type JsonRpcRequest = {
-  id: number;
-  jsonrpc: "2.0";
-  method: string; // MethodNames?
-  params: any;
-};
 
 export type WalletDepositParams = {
   amount: DecString;
   assetId: Address;
 };
+
+// TODO: replace with IBasicEventEmitter
+export class ConnextEventEmitter extends EventEmitter<string | ChannelMethods | EventName> {}
 
 export interface IRpcConnection extends ConnextEventEmitter {
   ////////////////////////////////////////

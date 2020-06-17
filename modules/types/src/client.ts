@@ -4,13 +4,14 @@ import { AppRegistry, DefaultApp, AppInstanceJson } from "./app";
 import { Address, Bytes32, DecString, PublicIdentifier } from "./basic";
 import { ChannelProviderConfig, IChannelProvider } from "./channelProvider";
 import { IChannelSigner } from "./crypto";
-import { EventNames } from "./events";
+import { EventName, EventPayload } from "./events";
 import { ILogger, ILoggerService } from "./logger";
 import { IMessagingService } from "./messaging";
 import { NodeResponses } from "./node";
-import { MethodResults, MethodParams, MethodName } from "./methods";
-import { IClientStore } from "./store";
+import { MethodResults, MethodParams } from "./methods";
+import { IStoreService } from "./store";
 import { PublicParams, PublicResults } from "./public";
+import { AppAction } from ".";
 
 /////////////////////////////////
 
@@ -19,7 +20,7 @@ export interface ClientOptions {
   channelProvider?: IChannelProvider;
   ethProviderUrl: string;
   signer?: string | IChannelSigner;
-  store?: IClientStore;
+  store?: IStoreService;
   logger?: ILogger;
   loggerService?: ILoggerService;
   logLevel?: number;
@@ -44,7 +45,7 @@ export interface IConnextClient {
 
   // Expose some internal machineary for easier debugging
   messaging: IMessagingService;
-  store: IClientStore;
+  store: IStoreService;
 
   ////////////////////////////////////////
   // Methods
@@ -53,10 +54,23 @@ export interface IConnextClient {
 
   ///////////////////////////////////
   // LISTENER METHODS
-  on(event: EventNames | MethodName, callback: (...args: any[]) => void): void;
-  once(event: EventNames | MethodName, callback: (...args: any[]) => void): void;
-  emit(event: EventNames | MethodName, data: any): boolean;
-  removeListener(event: EventNames | MethodName, callback: (...args: any[]) => void): void;
+  on<T extends EventName>(
+    event: T,
+    callback: (payload: EventPayload[T]) => void | Promise<void>,
+    filter?: (payload: EventPayload[T]) => boolean,
+  ): void;
+  once<T extends EventName>(
+    event: T,
+    callback: (payload: EventPayload[T]) => void | Promise<void>,
+    filter?: (payload: EventPayload[T]) => boolean,
+  ): void;
+  waitFor<T extends EventName>(
+    event: T,
+    timeout: number,
+    filter?: (payload: EventPayload[T]) => boolean,
+  ): Promise<EventPayload[T]>;
+  emit<T extends EventName>(event: T, payload: EventPayload[T]): boolean;
+  off(): void;
 
   ///////////////////////////////////
   // CORE CHANNEL METHODS
@@ -77,7 +91,7 @@ export interface IConnextClient {
   resolveCondition(params: PublicParams.ResolveCondition): Promise<PublicResults.ResolveCondition>;
   restoreState(): Promise<void>;
   swap(params: PublicParams.Swap): Promise<PublicResults.Swap>;
-  transfer(params: PublicParams.Transfer): Promise<PublicResults.LinkedTransfer>;
+  transfer(params: PublicParams.Transfer): Promise<PublicResults.ConditionalTransfer>;
   withdraw(params: PublicParams.Withdraw): Promise<PublicResults.Withdraw>;
 
   ///////////////////////////////////
@@ -114,7 +128,9 @@ export interface IConnextClient {
   getStateChannel(): Promise<MethodResults.GetStateChannel>;
   getFreeBalance(assetId?: Address): Promise<MethodResults.GetFreeBalanceState>;
   getAppInstances(): Promise<AppInstanceJson[]>;
-  getAppInstance(appIdentityHash: Bytes32): Promise<MethodResults.GetAppInstanceDetails>;
+  getAppInstance(
+    appIdentityHash: Bytes32,
+  ): Promise<MethodResults.GetAppInstanceDetails | undefined>;
   getProposedAppInstances(
     multisigAddress?: Address,
   ): Promise<MethodResults.GetProposedAppInstances | undefined>;
@@ -123,7 +139,7 @@ export interface IConnextClient {
   ): Promise<MethodResults.GetProposedAppInstance | undefined>;
   proposeInstallApp(params: MethodParams.ProposeInstall): Promise<MethodResults.ProposeInstall>;
   installApp(appIdentityHash: Bytes32): Promise<MethodResults.Install>;
-  rejectInstallApp(appIdentityHash: Bytes32): Promise<MethodResults.Uninstall>;
+  rejectInstallApp(appIdentityHash: Bytes32, reason?: string): Promise<MethodResults.Uninstall>;
   takeAction(appIdentityHash: Bytes32, action: any): Promise<MethodResults.TakeAction>;
-  uninstallApp(appIdentityHash: Bytes32): Promise<MethodResults.Uninstall>;
+  uninstallApp(appIdentityHash: Bytes32, action?: AppAction): Promise<MethodResults.Uninstall>;
 }

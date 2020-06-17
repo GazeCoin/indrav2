@@ -1,34 +1,37 @@
-import { bigNumberify } from "ethers/utils";
-import { isBN, toBN } from "./bigNumbers";
+import { BigNumber } from "ethers";
 
-export const bigNumberifyJson = (json: any): any =>
-  typeof json === "string"
+import { isBN, toBN } from "./bigNumbers";
+import { abbreviate } from "./strings";
+
+export function bigNumberifyJson<T = any>(json: any): T {
+  return typeof json === "string"
     ? json
     : JSON.parse(JSON.stringify(json), (key: string, value: any): any =>
-        value && value["_hex"] ? toBN(value._hex) : value,
+        value && value._hex ? toBN(value._hex) : value,
       );
+}
 
-export const deBigNumberifyJson = (json: any): any =>
-  JSON.parse(JSON.stringify(json), (key: string, val: any) =>
-    val && isBN(val) ? val.toHexString() : val,
+export function deBigNumberifyJson<T = any>(json: any): T {
+  return JSON.parse(JSON.stringify(json), (key: string, value: any) =>
+    value && isBN(value) && value.toHexString ? value.toHexString() : value,
   );
-
+}
 // Give abrv = true to abbreviate hex strings and addresss to look like "0x6FEC..kuQk"
-export const stringify = (value: any, abrv: boolean = false): string =>
+export const stringify = (value: any, abrv = false, spaces = 2): string =>
   JSON.stringify(
     value,
     (key: string, value: any): any =>
       value && value._hex
-        ? bigNumberify(value).toString()
+        ? BigNumber.from(value).toString()
         : abrv && value && typeof value === "string" && value.startsWith("indra")
-        ? `${value.substring(0, 9)}..${value.substring(value.length - 4)}`
+        ? abbreviate(value)
         : abrv && value && typeof value === "string" && value.startsWith("0x") && value.length > 12
-        ? `${value.substring(0, 6)}..${value.substring(value.length - 4)}`
+        ? abbreviate(value)
         : value,
-    2,
+    spaces,
   );
 
-const nullify = (key: string, value: any) => typeof value === "undefined" ? null : value;
+const nullify = (key: string, value: any) => (typeof value === "undefined" ? null : value);
 
 export const safeJsonStringify = (value: any): string => {
   try {
@@ -39,12 +42,11 @@ export const safeJsonStringify = (value: any): string => {
   }
 };
 
-export const safeJsonParse = (value: any): any => {
+export function safeJsonParse<T = any>(value: any): T {
   try {
     return typeof value === "string" ? JSON.parse(value, nullify) : value;
   } catch (e) {
     console.log(`Failed to safeJsonParse value ${value}: ${e.message}`);
     return value;
   }
-};
-
+}

@@ -1,45 +1,49 @@
-import { NetworkContext } from "@connext/types";
+import { ChallengeRegistry } from "@connext/contracts";
+import { ContractAddresses } from "@connext/types";
 import { getRandomAddress, toBN } from "@connext/utils";
-import { Contract, Wallet } from "ethers";
-import { WeiPerEther, AddressZero } from "ethers/constants";
+import { Contract, Wallet, constants, utils } from "ethers";
 
 import { SetStateCommitment } from "../../ethereum";
 import { FreeBalanceClass, StateChannel } from "../../models";
 
-import { ChallengeRegistry } from "../contracts";
 import { toBeEq } from "../bignumber-jest-matcher";
 import { getRandomChannelSigners } from "../random-signing-keys";
-import { getAddress } from "ethers/utils";
+
+const { WeiPerEther, AddressZero } = constants;
+const { getAddress } = utils;
 
 // The ChallengeRegistry.setState call _could_ be estimated but we haven't
 // written this test to do that yet
 const SETSTATE_COMMITMENT_GAS = 6e9;
 
 let wallet: Wallet;
-let network: NetworkContext;
+let contracts: ContractAddresses;
 let appRegistry: Contract;
 
 expect.extend({ toBeEq });
 
 beforeAll(async () => {
   wallet = global["wallet"];
-  network = global["network"];
-  appRegistry = new Contract(network.ChallengeRegistry, ChallengeRegistry.abi, wallet);
+  contracts = global["contracts"];
+  if (!contracts) {
+    throw new Error(
+      `Contracts missing: ${JSON.stringify(global["contracts"])} | ${Object.keys(global)}`,
+    );
+  }
+  console.log(``);
+  appRegistry = new Contract(contracts.ChallengeRegistry, ChallengeRegistry.abi, wallet);
 });
 
 /**
  * @summary Setup a StateChannel then set state on ETH Free Balance
  */
 describe("set state on free balance", () => {
-  it("should have the correct versionNumber", async done => {
+  it("should have the correct versionNumber", async (done) => {
     const [initiatorNode, responderNode] = getRandomChannelSigners(2);
     // State channel testing values
     let stateChannel = StateChannel.setupChannel(
-      network.IdentityApp,
-      {
-        proxyFactory: network.ProxyFactory,
-        multisigMastercopy: network.MinimumViableMultisig,
-      },
+      contracts.IdentityApp,
+      contracts,
       getAddress(getRandomAddress()),
       initiatorNode.publicIdentifier,
       responderNode.publicIdentifier,
@@ -58,7 +62,7 @@ describe("set state on free balance", () => {
     const freeBalanceETH = stateChannel.freeBalance;
 
     const setStateCommitment = new SetStateCommitment(
-      network.ChallengeRegistry,
+      contracts.ChallengeRegistry,
       freeBalanceETH.identity,
       freeBalanceETH.hashOfLatestState,
       toBN(freeBalanceETH.versionNumber),

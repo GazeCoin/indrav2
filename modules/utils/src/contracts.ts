@@ -1,8 +1,20 @@
-import { BigNumber, solidityPack, keccak256 } from "ethers/utils";
+import { BigNumberish, utils } from "ethers";
 import { AppIdentity, CommitmentTarget } from "@connext/types";
+import { LimitedCache } from "./limitedCache";
+
+const { solidityPack, keccak256 } = utils;
+
+const appIdentityCache = new LimitedCache(50);
 
 export const appIdentityToHash = (appIdentity: AppIdentity): string => {
-  return keccak256(
+  const key = `${appIdentity.multisigAddress}${
+    appIdentity.channelNonce
+  }${appIdentity.participants.join("")}${appIdentity.appDefinition}${appIdentity.defaultTimeout}`;
+  const cached = appIdentityCache.get<string>(key);
+  if (cached) {
+    return cached;
+  }
+  const res = keccak256(
     solidityPack(
       ["address", "uint256", "bytes32", "address", "uint256"],
       [
@@ -14,10 +26,12 @@ export const appIdentityToHash = (appIdentity: AppIdentity): string => {
       ],
     ),
   );
+  appIdentityCache.set(key, res);
+  return res;
 };
 
 // TS version of MChallengeRegistryCore::computeCancelDisputeHash
-export const computeCancelDisputeHash = (identityHash: string, versionNumber: BigNumber) =>
+export const computeCancelDisputeHash = (identityHash: string, versionNumber: BigNumberish) =>
   keccak256(
     solidityPack(
       ["uint8", "bytes32", "uint256"],
@@ -32,8 +46,8 @@ export const appStateToHash = (state: string) => keccak256(state);
 export const computeAppChallengeHash = (
   id: string,
   appStateHash: string,
-  versionNumber: BigNumber,
-  timeout: BigNumber,
+  versionNumber: BigNumberish,
+  timeout: BigNumberish,
 ) =>
   keccak256(
     solidityPack(

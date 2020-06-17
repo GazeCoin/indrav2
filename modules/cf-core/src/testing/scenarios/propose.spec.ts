@@ -1,27 +1,26 @@
-import { ProposeMessage, MethodParams } from "@connext/types";
+import { MethodParams } from "@connext/types";
 import { deBigNumberifyJson } from "@connext/utils";
 
-import { Node } from "../../node";
+import { CFCore } from "../../cfCore";
 
 import { toBeLt } from "../bignumber-jest-matcher";
-import { NetworkContextForTestSuite } from "../contracts";
+import { TestContractAddresses } from "../contracts";
 import { setup, SetupContext } from "../setup";
 import {
   assertMessage,
-  collateralizeChannel,
   createChannel,
-  getAppInstanceProposal,
+  getAppInstanceJson,
   getProposedAppInstances,
   makeProposeCall,
 } from "../utils";
 
 expect.extend({ toBeLt });
 
-const { TicTacToeApp } = global["network"] as NetworkContextForTestSuite;
+const { TicTacToeApp } = global["contracts"] as TestContractAddresses;
 
 async function assertEqualProposedApps(
-  nodeA: Node,
-  nodeB: Node,
+  nodeA: CFCore,
+  nodeB: CFCore,
   multisigAddress: string,
   expectedAppIds: string[],
 ): Promise<void> {
@@ -32,16 +31,16 @@ async function assertEqualProposedApps(
   expect(proposedA).toEqual(proposedB);
   // check each appID
   for (const id of expectedAppIds) {
-    const appA = await getAppInstanceProposal(nodeA, id, multisigAddress);
-    const appB = await getAppInstanceProposal(nodeB, id, multisigAddress);
+    const appA = await getAppInstanceJson(nodeA, id, multisigAddress);
+    const appB = await getAppInstanceJson(nodeB, id, multisigAddress);
     expect(appA).toEqual(appB);
   }
 }
 
 describe("Node method follows spec - propose install", () => {
   let multisigAddress: string;
-  let nodeA: Node;
-  let nodeB: Node;
+  let nodeA: CFCore;
+  let nodeB: CFCore;
 
   describe("NodeA initiates proposal, nodeB approves, found in both stores", () => {
     beforeEach(async () => {
@@ -50,14 +49,12 @@ describe("Node method follows spec - propose install", () => {
       nodeB = context["B"].node;
 
       multisigAddress = await createChannel(nodeA, nodeB);
-      await collateralizeChannel(multisigAddress, nodeA, nodeB);
     });
 
     it("propose install an app with eth and a meta", async (done: jest.DoneCallback) => {
       const rpc = makeProposeCall(nodeB, TicTacToeApp, multisigAddress);
       const params = {
         ...(rpc.parameters as MethodParams.ProposeInstall),
-        multisigAddress: undefined,
         meta: {
           info: "Provided meta",
         },
@@ -71,16 +68,16 @@ describe("Node method follows spec - propose install", () => {
       };
 
       const appId = await new Promise(async (resolve, reject) => {
-        let identityHash;
+        let identityHash: string = "";
         let dispatched = false;
-        nodeB.once("PROPOSE_INSTALL_EVENT", async (msg: ProposeMessage) => {
+        nodeB.once("PROPOSE_INSTALL_EVENT", async (msg) => {
           // make sure message has the right structure
-          assertMessage(msg, expectedMessageB, ["data.appIdentityHash"]);
+          assertMessage<"PROPOSE_INSTALL_EVENT">(msg, expectedMessageB, ["data.appInstanceId"]);
           // both nodes should have 1 app, they should be the same
-          identityHash = msg.data.appIdentityHash;
+          identityHash = msg.data.appInstanceId;
           if (dispatched) resolve(identityHash);
         });
-  
+
         // TODO: add expected message B
         try {
           await nodeA.rpcRouter.dispatch({

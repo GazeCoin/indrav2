@@ -1,7 +1,7 @@
 import { Address, AssetId, BigNumber, Bytes32, PublicIdentifier, SolidityValueType } from "./basic";
 import { AppState } from "./contracts";
 
-import { AppABIEncodings, AppInstanceJson, AppInstanceProposal } from "./app";
+import { AppABIEncodings, AppInstanceJson } from "./app";
 import { OutcomeType } from "./contracts";
 import { PublicParams, PublicResults } from "./public";
 import { StateChannelJSON } from "./state";
@@ -82,7 +82,7 @@ type GetFreeBalanceStateParams = {
 };
 
 type GetFreeBalanceStateResult = {
-  [s: string]: BigNumber;
+  [signerAddress: string]: BigNumber;
 };
 
 ////////////////////////////////////////
@@ -104,7 +104,7 @@ type GetProposedAppInstanceParams = {
 };
 
 type GetProposedAppInstanceResult = {
-  appInstance: AppInstanceProposal;
+  appInstance: AppInstanceJson;
 };
 
 ////////////////////////////////////////
@@ -114,7 +114,7 @@ type GetProposedAppInstancesParams = {
 };
 
 type GetProposedAppInstancesResult = {
-  appInstances: AppInstanceProposal[];
+  appInstances: AppInstanceJson[];
 };
 
 ////////////////////////////////////////
@@ -131,6 +131,7 @@ type GetStateChannelResult = {
 
 type InstallParams = {
   appIdentityHash: Bytes32;
+  multisigAddress: Address;
 };
 
 type InstallResult = {
@@ -141,6 +142,7 @@ type InstallResult = {
 
 type RequestDepositRightsParams = {
   assetId?: Address;
+  multisigAddress: Address;
 };
 
 type RequestDepositRightsResult = {
@@ -157,7 +159,8 @@ type ProposeInstallParams = {
   initialState: AppState;
   initiatorDeposit: BigNumber;
   initiatorDepositAssetId: AssetId;
-  meta?: Object;
+  meta?: any;
+  multisigAddress: Address;
   outcomeType: OutcomeType;
   responderIdentifier: PublicIdentifier;
   responderDeposit: BigNumber;
@@ -173,6 +176,8 @@ type ProposeInstallResult = {
 
 type RejectInstallParams = {
   appIdentityHash: Bytes32;
+  multisigAddress: Address;
+  reason?: string;
 };
 
 type RejectInstallResult = {};
@@ -182,6 +187,7 @@ type RejectInstallResult = {};
 type TakeActionParams = {
   appIdentityHash: Bytes32;
   action: SolidityValueType;
+  multisigAddress: Address;
   stateTimeout?: BigNumber;
 };
 
@@ -193,11 +199,15 @@ type TakeActionResult = {
 
 type UninstallParams = {
   appIdentityHash: Bytes32;
+  multisigAddress: Address;
+  action?: SolidityValueType;
 };
 
 type UninstallResult = {
   appIdentityHash: Bytes32;
   multisigAddress: Address;
+  uninstalledApp: AppInstanceJson;
+  action?: SolidityValueType;
 };
 
 ////////////////////////////////////////
@@ -205,6 +215,7 @@ type UninstallResult = {
 type RescindDepositRightsParams = {
   assetId?: Address;
   appIdentityHash?: Bytes32;
+  multisigAddress: Address;
 };
 
 type RescindDepositRightsResult = {
@@ -269,7 +280,7 @@ export const MethodNames = enumify({
   chan_withdraw: "chan_withdraw",
   chan_withdrawCommitment: "chan_withdrawCommitment",
 });
-type MethodNames = (typeof MethodNames)[keyof typeof MethodNames];
+type MethodNames = typeof MethodNames[keyof typeof MethodNames];
 export type MethodName = keyof typeof MethodNames;
 
 export namespace MethodParams {
@@ -277,7 +288,7 @@ export namespace MethodParams {
   export type DeployStateDepositHolder = DeployStateDepositHolderParams;
   export type Deposit = DepositParams;
   export type GetAppInstanceDetails = GetAppInstanceDetailsParams;
-  export type GetAppInstances = GetAppInstancesParams
+  export type GetAppInstances = GetAppInstancesParams;
   export type GetChannelAddresses = GetChannelAddressesParams;
   export type GetFreeBalanceState = GetFreeBalanceStateParams;
   export type GetProposedAppInstance = GetProposedAppInstanceParams;
@@ -326,7 +337,7 @@ export namespace MethodResults {
   export type DeployStateDepositHolder = DeployStateDepositHolderResult;
   export type Deposit = DepositResult;
   export type GetAppInstanceDetails = GetAppInstanceDetailsResult;
-  export type GetAppInstances = GetAppInstancesResult
+  export type GetAppInstances = GetAppInstancesResult;
   export type GetChannelAddresses = GetChannelAddressesResult;
   export type GetFreeBalanceState = GetFreeBalanceStateResult;
   export type GetProposedAppInstance = GetProposedAppInstanceResult;

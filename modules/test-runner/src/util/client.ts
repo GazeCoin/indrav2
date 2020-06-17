@@ -7,12 +7,17 @@ import {
   IConnextClient,
   ProtocolParam,
   ProtocolNames,
-  IClientStore,
+  IStoreService,
 } from "@connext/types";
-import { getRandomChannelSigner, ChannelSigner, ColorfulLogger } from "@connext/utils";
+import { ERC20 } from "@connext/contracts";
+import {
+  getRandomChannelSigner,
+  ChannelSigner,
+  ColorfulLogger,
+  getRandomPrivateKey,
+} from "@connext/utils";
 import { expect } from "chai";
 import { Contract, Wallet } from "ethers";
-import tokenAbi from "human-standard-token-abi";
 
 import { ETH_AMOUNT_LG, TOKEN_AMOUNT } from "./constants";
 import { env } from "./env";
@@ -20,17 +25,17 @@ import { ethWallet } from "./ethprovider";
 import { TestMessagingService, SendReceiveCounter, RECEIVED, SEND, NO_LIMIT } from "./messaging";
 
 export const createClient = async (
-  opts: Partial<ClientOptions & { id: string }> = {},
+  opts: Partial<ClientOptions & { id: string; logLevel: number }> = {},
   fund: boolean = true,
 ): Promise<IConnextClient> => {
   const store = opts.store || getMemoryStore();
-  const wallet = Wallet.createRandom();
-  const log = new ColorfulLogger("CreateClient", env.logLevel);
+  const log = new ColorfulLogger("CreateClient", opts.logLevel || env.logLevel);
   const clientOpts: ClientOptions = {
     ethProviderUrl: env.ethProviderUrl,
-    loggerService: new ColorfulLogger("Client", env.logLevel, true, opts.id),
-    signer: opts.signer || wallet.privateKey,
+    loggerService: new ColorfulLogger("Client", opts.logLevel || env.logLevel, true, opts.id),
+    signer: opts.signer || getRandomPrivateKey(),
     nodeUrl: env.nodeUrl,
+    messagingUrl: env.natsUrl,
     store,
     ...opts,
   };
@@ -39,15 +44,19 @@ export const createClient = async (
   const client = await connect(clientOpts);
   log.info(`connect() returned after ${Date.now() - start}ms`);
   start = Date.now();
-
-  const ethTx = await ethWallet.sendTransaction({
-    to: client.signerAddress,
-    value: ETH_AMOUNT_LG,
-  });
   if (fund) {
-    const token = new Contract(client.config.contractAddresses.Token, tokenAbi, ethWallet);
-    const tokenTx = await token.functions.transfer(client.signerAddress, TOKEN_AMOUNT);
-    await Promise.all([ethTx.wait(), tokenTx.wait()]);
+    log.info(`sending client eth`);
+    const ethTx = await ethWallet.sendTransaction({
+      to: client.signerAddress,
+      value: ETH_AMOUNT_LG,
+    });
+    log.debug(`transaction sent ${ethTx.hash}, waiting...`);
+    await ethTx.wait();
+    const token = new Contract(client.config.contractAddresses.Token!, ERC20.abi, ethWallet);
+    log.info(`sending client tokens`);
+    const tokenTx = await token.transfer(client.signerAddress, TOKEN_AMOUNT);
+    log.debug(`transaction sent ${tokenTx.hash}, waiting...`);
+    await tokenTx.wait();
   }
   expect(client.signerAddress).to.be.ok;
   expect(client.publicIdentifier).to.be.ok;
@@ -62,6 +71,7 @@ export const createRemoteClient = async (
     channelProvider,
     ethProviderUrl: env.ethProviderUrl,
     loggerService: new ColorfulLogger("TestRunner", env.logLevel, true),
+    messagingUrl: env.natsUrl,
   };
   const client = await connect(clientOpts);
   expect(client.signerAddress).to.be.ok;
@@ -74,6 +84,7 @@ export const createDefaultClient = async (network: string, opts?: Partial<Client
   const urlOptions = {
     ethProviderUrl: env.ethProviderUrl,
     nodeUrl: env.nodeUrl,
+    messagingUrl: env.natsUrl,
   };
   let clientOpts: Partial<ClientOptions> = {
     ...opts,
@@ -98,11 +109,11 @@ export type ClientTestMessagingInputOpts = {
   protocol: keyof typeof ProtocolNames | "any"; // use "any" to limit any messages by count
   signer: IChannelSigner;
   params: Partial<ProtocolParam>;
-  store?: IClientStore;
+  store?: IStoreService;
 };
 
 export const createClientWithMessagingLimits = async (
-  opts: Partial<ClientTestMessagingInputOpts> = {},
+  opts: Partial<ClientTestMessagingInputOpts> & { id?: string; logLevel?: number } = {},
 ): Promise<IConnextClient> => {
   const { protocol, ceiling, signer: signerOpts, params } = opts;
   const signer = signerOpts || getRandomChannelSigner(env.ethProviderUrl);
@@ -117,7 +128,7 @@ export const createClientWithMessagingLimits = async (
     expect(messaging.apiCount).to.containSubset(emptyCount);
     return createClient({ messaging, signer });
   }
-  let messageOptions = {} as any;
+  const messageOptions = {} as any;
   if (protocol === "any" && ceiling) {
     // assign the ceiling for the general message count
     // by default, only use the send and receive methods here
@@ -153,5 +164,11 @@ export const createClientWithMessagingLimits = async (
         params,
       });
   expect(messaging.providedOptions).to.containSubset(messageOptions);
-  return createClient({ messaging, signer: signer });
+  return createClient({
+    messaging,
+    signer: signer,
+    store: opts.store,
+    id: opts.id,
+    logLevel: opts.logLevel,
+  });
 };

@@ -2,9 +2,9 @@ import { safeJsonParse, safeJsonStringify } from "@connext/utils";
 import localStorage from "localStorage";
 
 import { storeDefaults } from "../constants";
-import { WrappedStorage } from "../types";
+import { KeyValueStorage } from "../types";
 
-export class WrappedLocalStorage implements WrappedStorage {
+export class WrappedLocalStorage implements KeyValueStorage {
   private localStorage: Storage = localStorage;
 
   constructor(
@@ -13,6 +13,10 @@ export class WrappedLocalStorage implements WrappedStorage {
   ) {}
 
   init(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  close(): Promise<void> {
     return Promise.resolve();
   }
 
@@ -30,8 +34,10 @@ export class WrappedLocalStorage implements WrappedStorage {
   }
 
   async getKeys(): Promise<string[]> {
-    const relevantKeys = Object.keys(this.localStorage).filter(key => key.startsWith(this.prefix));
-    return relevantKeys.map(key => key.split(`${this.prefix}${this.separator}`)[1]);
+    const relevantKeys = Object.keys(this.localStorage).filter((key) =>
+      key.startsWith(this.prefix),
+    );
+    return relevantKeys.map((key) => key.split(`${this.prefix}${this.separator}`)[1]);
   }
 
   async getEntries(): Promise<[string, any][]> {

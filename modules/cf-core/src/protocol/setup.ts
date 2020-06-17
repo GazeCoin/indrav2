@@ -6,7 +6,7 @@ import {
   ProtocolRoles,
   SetupMiddlewareContext,
 } from "@connext/types";
-import { getSignerAddressFromPublicIdentifier, logTime, stringify } from "@connext/utils";
+import { getSignerAddressFromPublicIdentifier, logTime, stringify, delay } from "@connext/utils";
 
 import { UNASSIGNED_SEQ_NO } from "../constants";
 import { getSetupCommitment, getSetStateCommitment } from "../ethereum";
@@ -24,7 +24,7 @@ const { OP_SIGN, OP_VALIDATE, IO_SEND, IO_SEND_AND_WAIT, PERSIST_STATE_CHANNEL }
  * specs.counterfactual.com/04-setup-protocol
  */
 export const SETUP_PROTOCOL: ProtocolExecutionFlow = {
-  0 /* Initiating */: async function* (context: Context) {
+  0 /* Initiating */: async function* (context: Context & { preProtocolChannel: StateChannel }) {
     const { message, network } = context;
     const log = context.log.newContext("CF-SetupProtocol");
     const start = Date.now();
@@ -39,16 +39,19 @@ export const SETUP_PROTOCOL: ProtocolExecutionFlow = {
       initiatorIdentifier,
     } = params as ProtocolParams.Setup;
 
-    yield [
+    const error = yield [
       OP_VALIDATE,
       protocol,
       { params, role: ProtocolRoles.initiator } as SetupMiddlewareContext,
     ];
+    if (!!error) {
+      throw new Error(error);
+    }
 
     // 56 ms
     const stateChannel = StateChannel.setupChannel(
-      network.IdentityApp,
-      { proxyFactory: network.ProxyFactory, multisigMastercopy: network.MinimumViableMultisig },
+      network.contractAddresses.IdentityApp,
+      network.contractAddresses,
       multisigAddress,
       initiatorIdentifier,
       responderIdentifier,
@@ -147,16 +150,19 @@ export const SETUP_PROTOCOL: ProtocolExecutionFlow = {
       responderIdentifier,
     } = params as ProtocolParams.Setup;
 
-    yield [
+    const error = yield [
       OP_VALIDATE,
       protocol,
       { params, role: ProtocolRoles.responder } as SetupMiddlewareContext,
     ];
+    if (!!error) {
+      throw new Error(error);
+    }
 
     // 73 ms
     const stateChannel = StateChannel.setupChannel(
-      network.IdentityApp,
-      { proxyFactory: network.ProxyFactory, multisigMastercopy: network.MinimumViableMultisig },
+      network.contractAddresses.IdentityApp,
+      network.contractAddresses,
       multisigAddress,
       initiatorIdentifier,
       responderIdentifier,

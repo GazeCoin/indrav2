@@ -11,6 +11,8 @@ import {
   WithdrawAppName,
   WithdrawAppState,
   DefaultApp,
+  CF_METHOD_TIMEOUT,
+  EventPayloads,
 } from "@connext/types";
 import {
   getSignerAddressFromPublicIdentifier,
@@ -18,11 +20,12 @@ import {
   stringify,
   toBN,
 } from "@connext/utils";
-import { AddressZero, Zero, HashZero } from "ethers/constants";
-import { TransactionResponse } from "ethers/providers";
-import { getAddress, hexlify, randomBytes } from "ethers/utils";
+import { providers, constants, utils } from "ethers";
 
 import { AbstractController } from "./AbstractController";
+
+const { AddressZero, Zero, HashZero } = constants;
+const { getAddress, hexlify, randomBytes } = utils;
 
 export class WithdrawalController extends AbstractController {
   public async withdraw(params: PublicParams.Withdraw): Promise<PublicResults.Withdraw> {
@@ -43,7 +46,7 @@ export class WithdrawalController extends AbstractController {
     }
 
     const { assetId, recipient } = params;
-    let transaction: TransactionResponse | undefined;
+    let transaction: providers.TransactionResponse | undefined;
 
     this.throwIfAny(getAddressError(recipient), getAddressError(assetId));
 
@@ -59,27 +62,51 @@ export class WithdrawalController extends AbstractController {
       );
 
       this.log.debug(`Installing withdrawal app`);
-      await this.proposeWithdrawApp(params, hash, withdrawerSignatureOnWithdrawCommitment);
+      const withdrawAppId = await this.proposeWithdrawApp(
+        params,
+        hash,
+        withdrawerSignatureOnWithdrawCommitment,
+      );
       this.log.debug(`Successfully installed!`);
 
-      this.connext.listener.emit(EventNames.WITHDRAWAL_STARTED_EVENT, {
+      this.connext.emit(EventNames.WITHDRAWAL_STARTED_EVENT, {
         params,
+        // @ts-ignore
         withdrawCommitment,
         withdrawerSignatureOnWithdrawCommitment,
       });
 
       this.log.debug(`Watching chain for user withdrawal`);
-      [transaction] = await this.connext.watchForUserWithdrawal();
-      this.log.debug(`Node put withdrawal onchain: ${transaction.hash}`);
+      const raceRes = (await Promise.race([
+        this.listener.waitFor(
+          EventNames.UPDATE_STATE_FAILED_EVENT,
+          CF_METHOD_TIMEOUT * 3,
+          (msg) => msg.params.appIdentityHash === withdrawAppId,
+        ),
+        new Promise(async (resolve, reject) => {
+          try {
+            const [tx] = await this.connext.watchForUserWithdrawal();
+            return resolve(tx);
+          } catch (e) {
+            return reject(new Error(e));
+          }
+        }),
+      ])) as EventPayloads.UpdateStateFailed | providers.TransactionResponse;
+      if ((raceRes as EventPayloads.UpdateStateFailed).error) {
+        throw new Error((raceRes as EventPayloads.UpdateStateFailed).error);
+      }
+      transaction = raceRes as providers.TransactionResponse;
+      this.log.info(`Node put withdrawal onchain: ${transaction.hash}`);
       this.log.debug(`Transaction details: ${stringify(transaction)}`);
 
-      this.connext.listener.emit(EventNames.WITHDRAWAL_CONFIRMED_EVENT, { transaction });
+      this.connext.emit(EventNames.WITHDRAWAL_CONFIRMED_EVENT, { transaction });
 
       this.log.debug(`Removing withdraw commitment`);
       await this.removeWithdrawCommitmentFromStore(transaction);
     } catch (e) {
-      this.connext.listener.emit(EventNames.WITHDRAWAL_FAILED_EVENT, {
+      this.connext.emit(EventNames.WITHDRAWAL_FAILED_EVENT, {
         params,
+        // @ts-ignore
         withdrawCommitment,
         withdrawerSignatureOnWithdrawCommitment,
         error: e.stack || e.message,
@@ -100,7 +127,7 @@ export class WithdrawalController extends AbstractController {
 
     const generatedCommitment = await this.createWithdrawCommitment({
       amount: state.transfers[0].amount,
-      assetId: appInstance.singleAssetTwoPartyCoinTransferInterpreterParams.tokenAddress,
+      assetId: appInstance.outcomeInterpreterParameters["tokenAddress"],
       recipient: state.transfers[0].to,
       nonce: state.nonce,
     } as PublicParams.Withdraw);
@@ -108,8 +135,9 @@ export class WithdrawalController extends AbstractController {
     this.log.debug(`Signing withdrawal commitment: ${hash}`);
 
     // Dont need to validate anything because we already did it during the propose flow
-    const counterpartySignatureOnWithdrawCommitment =
-      await this.connext.channelProvider.signMessage(hash);
+    const counterpartySignatureOnWithdrawCommitment = await this.connext.channelProvider.signMessage(
+      hash,
+    );
     this.log.debug(`Taking action on ${appInstance.identityHash}`);
     await this.connext.takeAction(appInstance.identityHash, {
       signature: counterpartySignatureOnWithdrawCommitment,
@@ -176,6 +204,7 @@ export class WithdrawalController extends AbstractController {
       initialState,
       initiatorDeposit: amount,
       initiatorDepositAssetId: assetId,
+      multisigAddress: this.connext.multisigAddress,
       outcomeType,
       responderIdentifier: this.connext.nodeIdentifier,
       responderDeposit: Zero,
@@ -201,7 +230,9 @@ export class WithdrawalController extends AbstractController {
     return;
   }
 
-  public async removeWithdrawCommitmentFromStore(transaction: TransactionResponse): Promise<void> {
+  public async removeWithdrawCommitmentFromStore(
+    transaction: providers.TransactionResponse,
+  ): Promise<void> {
     const minTx: MinimalTransaction = {
       to: transaction.to,
       value: transaction.value,

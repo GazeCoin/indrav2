@@ -1,7 +1,7 @@
 import { MethodResults, NodeResponses } from "@connext/types";
 import { MessagingService } from "@connext/messaging";
 import { FactoryProvider } from "@nestjs/common/interfaces";
-import { getAddress } from "ethers/utils";
+import { providers, utils } from "ethers";
 
 import { AuthService } from "../auth/auth.service";
 import { LoggerService } from "../logger/logger.service";
@@ -27,9 +27,9 @@ import {
 } from "../setupCommitment/setupCommitment.repository";
 
 import { ChannelRepository } from "./channel.repository";
-import { ChannelService } from "./channel.service";
-import { TransactionReceipt } from "ethers/providers";
-import { stringify } from "@connext/utils";
+import { ChannelService, RebalanceType } from "./channel.service";
+
+const { getAddress } = utils;
 
 class ChannelMessaging extends AbstractMessagingProvider {
   constructor(
@@ -58,16 +58,20 @@ class ChannelMessaging extends AbstractMessagingProvider {
   async requestCollateral(
     userPublicIdentifier: string,
     data: { assetId?: string },
-  ): Promise<TransactionReceipt | undefined> {
+  ): Promise<providers.TransactionReceipt | undefined> {
     // do not allow clients to specify an amount to collateralize with
     const channel = await this.channelRepository.findByUserPublicIdentifierOrThrow(
       userPublicIdentifier,
     );
     try {
-      const tx = await this.channelService.rebalance(channel, getAddress(data.assetId));
+      const tx = await this.channelService.rebalance(
+        channel,
+        getAddress(data.assetId),
+        RebalanceType.COLLATERALIZE,
+      );
       return tx;
     } catch (e) {
-      this.log.debug(`Failed to collateralize: ${stringify(e)}`);
+      this.log.debug(`Failed to collateralize: ${e.message}`);
       return undefined;
     }
   }

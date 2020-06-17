@@ -1,4 +1,4 @@
-import { BigNumber, keccak256, solidityPack, defaultAbiCoder } from "ethers/utils";
+import { BigNumber, constants, utils } from "ethers";
 import {
   CoinTransfer,
   Address,
@@ -9,16 +9,18 @@ import {
   SetStateCommitmentJSON,
   StateChannelJSON,
   StateSchemaVersion,
-  CONVENTION_FOR_ETH_ASSET_ID,
   MinimalTransaction,
 } from "@connext/types";
 import { ChannelSigner, toBN } from "@connext/utils";
-import { One, Zero } from "ethers/constants";
 import { SetStateCommitment, SetupCommitment } from "@connext/contracts";
+
 import { stateToHash } from "./utils";
-import { NetworkContextForTestSuite } from "./contracts";
+import { TestNetworkContext } from "./contracts";
 import { AppWithCounterClass } from "./appWithCounter";
 import { TokenIndexedBalance } from "./context";
+
+const { One, Zero } = constants;
+const { keccak256, solidityPack, defaultAbiCoder } = utils;
 
 type FreeBalanceStateJSON = {
   tokenAddresses: string[];
@@ -37,7 +39,7 @@ export class MiniFreeBalance {
     public readonly signerParticipants: ChannelSigner[],
     public readonly multisigAddress: string,
     private balancesIndexedByToken: TokenIndexedBalance,
-    private readonly networkContext: NetworkContextForTestSuite,
+    private readonly networkContext: TestNetworkContext,
     public versionNumber: BigNumber = One,
     private activeApps: string[] = [],
   ) {}
@@ -114,7 +116,7 @@ export class MiniFreeBalance {
   public static channelFactory(
     signers: ChannelSigner[],
     multisigAddress: string,
-    networkContext: NetworkContextForTestSuite,
+    networkContext: TestNetworkContext,
     activeApps: AppWithCounterClass[],
     remainingBalance: {
       [tokenAddress: string]: CoinTransfer[];
@@ -135,7 +137,7 @@ export class MiniFreeBalance {
       multisigAddress,
       addresses: {
         proxyFactory: networkContext.ProxyFactory,
-        multisigMastercopy: networkContext.MinimumViableMultisig,
+        minimumViableMultisig: networkContext.MinimumViableMultisig,
       },
       userIdentifiers: [signers[0].publicIdentifier, signers[1].publicIdentifier],
       proposedAppInstances: [],

@@ -1,20 +1,19 @@
 import {
   JsonRpcProvider,
-  BigNumber,
   WatcherEvents,
   StateProgressedEventData,
   SetStateCommitmentJSON,
   ChallengeUpdatedEventData,
   ChallengeProgressedEventData,
   ChallengeProgressionFailedEventData,
-  IClientStore,
+  IStoreService,
 } from "@connext/types";
-import { Wallet } from "ethers";
+import { BigNumber, Wallet, constants } from "ethers";
 
 import {
   setupContext,
   expect,
-  NetworkContextForTestSuite,
+  TestNetworkContext,
   MiniFreeBalance,
   AppWithCounterClass,
   verifyOnchainBalancesPostChallenge,
@@ -29,8 +28,9 @@ import {
 import { Watcher } from "../src";
 import { ChannelSigner, getRandomAddress, ColorfulLogger, toBN } from "@connext/utils";
 import { initiateDispute, OutcomeSetResults } from "./utils/initiateDispute";
-import { One } from "ethers/constants";
 import { cancelDispute } from "./utils/cancelDispute";
+
+const { One } = constants;
 
 describe("Watcher.init", () => {
   let provider: JsonRpcProvider;
@@ -63,14 +63,14 @@ describe("Watcher.init", () => {
 
 describe("Watcher.initiate", () => {
   let provider: JsonRpcProvider;
-  let store: IClientStore;
+  let store: IStoreService;
   let multisigAddress: string;
   let channelBalances: { [k: string]: BigNumber };
   let freeBalance: MiniFreeBalance;
   let app: AppWithCounterClass;
   let signers: ChannelSigner[];
 
-  let networkContext: NetworkContextForTestSuite;
+  let networkContext: TestNetworkContext;
 
   let watcher: Watcher;
   let wallet: Wallet;
@@ -146,14 +146,7 @@ describe("Watcher.initiate", () => {
       // logger: new ColorfulLogger("Watcher", 5, true, ""),
     });
     const [initiateRes, contractEvent] = await Promise.all([
-      initiateDispute(
-        activeApps[0],
-        freeBalance,
-        watcher,
-        store,
-        networkContext,
-        true,
-      ),
+      initiateDispute(activeApps[0], freeBalance, watcher, store, networkContext, true),
       new Promise((resolve) =>
         watcher.once(WatcherEvents.StateProgressedEvent, async (data: StateProgressedEventData) =>
           resolve(data),
@@ -178,11 +171,11 @@ describe("Watcher.initiate", () => {
 
 describe("Watcher.cancel", () => {
   let provider: JsonRpcProvider;
-  let store: IClientStore;
+  let store: IStoreService;
   let watcher: Watcher;
   let app: AppWithCounterClass;
   let freeBalance: MiniFreeBalance;
-  let networkContext: NetworkContextForTestSuite;
+  let networkContext: TestNetworkContext;
 
   beforeEach(async () => {
     const context = await setupContext(true, [{ defaultTimeout: toBN(2) }]);
@@ -272,15 +265,15 @@ describe("Watcher.cancel", () => {
 
 describe("Watcher responses", () => {
   let provider: JsonRpcProvider;
-  let store: IClientStore;
+  let store: IStoreService;
   let watcher: Watcher;
   let app: AppWithCounterClass;
   let freeBalance: MiniFreeBalance;
-  let networkContext: NetworkContextForTestSuite;
+  let networkContext: TestNetworkContext;
 
   let setState: (app: AppWithCounterClass, commitment: SetStateCommitmentJSON) => Promise<void>;
   let addActionToAppInStore: (
-    store: IClientStore,
+    store: IStoreService,
     appPriorToAction: AppWithCounterClass,
     action?: AppWithCounterAction,
   ) => Promise<AppWithCounterClass>;

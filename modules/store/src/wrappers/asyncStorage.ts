@@ -1,14 +1,15 @@
-import {
-  AsyncStorageData,
-  IAsyncStorage,
-  InitCallback,
-} from "@connext/types";
 import { safeJsonParse, safeJsonStringify } from "@connext/utils";
 
 import { storeDefaults, storeKeys } from "../constants";
-import { WrappedStorage } from "../types";
+import { IAsyncStorage, KeyValueStorage } from "../types";
 
-export class WrappedAsyncStorage implements WrappedStorage {
+interface AsyncStorageData {
+  [key: string]: any;
+}
+
+type InitCallback = (data: AsyncStorageData) => void;
+
+export class WrappedAsyncStorage implements KeyValueStorage {
   private data: AsyncStorageData = {};
   private initializing: boolean = false;
   private initCallbacks: InitCallback[] = [];
@@ -23,6 +24,10 @@ export class WrappedAsyncStorage implements WrappedStorage {
   }
 
   init(): Promise<void> {
+    return Promise.resolve();
+  }
+
+  close(): Promise<void> {
     return Promise.resolve();
   }
 
@@ -85,8 +90,8 @@ export class WrappedAsyncStorage implements WrappedStorage {
   }
 
   async getKeys(): Promise<string[]> {
-    const relevantKeys = Object.keys(this.data).filter(key => key.startsWith(this.prefix));
-    return relevantKeys.map(key => key.replace(`${this.prefix}${this.separator}`, ""));
+    const relevantKeys = Object.keys(this.data).filter((key) => key.startsWith(this.prefix));
+    return relevantKeys.map((key) => key.replace(`${this.prefix}${this.separator}`, ""));
   }
 
   async getEntries(): Promise<[string, any][]> {
@@ -97,7 +102,7 @@ export class WrappedAsyncStorage implements WrappedStorage {
 
   getKey(...args: string[]): string {
     let str = "";
-    args.forEach(arg => {
+    args.forEach((arg) => {
       // dont add separator to last one
       str = str.concat(arg, args.indexOf(arg) === args.length - 1 ? "" : this.separator);
     });

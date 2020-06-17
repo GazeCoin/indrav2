@@ -3,52 +3,48 @@ import {
   Address,
   AppABIEncodings,
   AppInstanceJson,
-  AppInstanceProposal,
   AssetId,
   ContractABI,
   CONVENTION_FOR_ETH_ASSET_ID,
-  CreateChannelMessage,
   DepositAppState,
   DepositAppStateEncoding,
   EventNames,
-  InstallMessage,
-  Message,
+  JsonRpcResponse,
   MethodNames,
   MethodParam,
   MethodParams,
   MethodResults,
   OutcomeType,
-  ProposeMessage,
   ProtocolParams,
   PublicIdentifier,
+  Rpc,
   SolidityValueType,
   UninstallMessage,
+  EventName,
+  ProtocolEventMessage,
+  SimpleLinkedTransferAppStateEncoding,
+  SimpleLinkedTransferAppActionEncoding,
 } from "@connext/types";
 import {
   bigNumberifyJson,
   deBigNumberifyJson,
   getAddressFromAssetId,
-  getRandomChannelSigner,
   getSignerAddressFromPublicIdentifier,
   toBN,
+  getRandomAddress,
 } from "@connext/utils";
-import { Contract, Wallet } from "ethers";
-import { JsonRpcProvider } from "ethers/providers";
-import { AddressZero, One, Zero } from "ethers/constants";
-import { BigNumber, bigNumberify, getAddress, hexlify, randomBytes } from "ethers/utils";
-import { JsonRpcResponse, Rpc } from "rpc-server";
+import { BigNumber, Contract, Wallet, providers, constants } from "ethers";
 
-import { Node } from "../node";
+import { CFCore } from "../cfCore";
 import { AppInstance, StateChannel } from "../models";
-import { CONTRACT_NOT_DEPLOYED } from "../errors";
-import { getRandomPublicIdentifier, getRandomPublicIdentifiers } from "../testing/random-signing-keys";
+import { CONTRACT_NOT_DEPLOYED, CALL_EXCEPTION } from "../errors";
+import { getRandomPublicIdentifier } from "../testing/random-signing-keys";
 
-import { DolphinCoin, NetworkContextForTestSuite } from "./contracts";
-import { initialLinkedState, linkedAbiEncodings } from "./linked-transfer";
-import { initialSimpleTransferState, simpleTransferAbiEncodings } from "./simple-transfer";
+import { TestContractAddresses } from "./contracts";
 import { initialEmptyTTTState, tttAbiEncodings } from "./tic-tac-toe";
-import { initialTransferState, transferAbiEncodings } from "./unidirectional-transfer";
 import { toBeEq } from "./bignumber-jest-matcher";
+
+const { AddressZero, One, Zero } = constants;
 
 expect.extend({ toBeEq });
 
@@ -59,84 +55,61 @@ interface AppContext {
   outcomeType: OutcomeType;
 }
 
-const {
-  DepositApp,
-  TicTacToeApp,
-  SimpleTransferApp,
-  UnidirectionalLinkedTransferApp,
-  UnidirectionalTransferApp,
-} = global[`network`] as NetworkContextForTestSuite;
+const { DepositApp, DolphinCoin, TicTacToeApp, SimpleLinkedTransferApp } = global[
+  `contracts`
+] as TestContractAddresses;
 
 export const newWallet = (wallet: Wallet) =>
   new Wallet(
     wallet.privateKey,
-    new JsonRpcProvider((wallet.provider as JsonRpcProvider).connection.url),
+    new providers.JsonRpcProvider((wallet.provider as providers.JsonRpcProvider).connection.url),
   );
 
-export function createAppInstanceProposalForTest(appIdentityHash: string, stateChannel?: StateChannel): AppInstanceProposal {
-  const [initiator, responder] = StateChannel
-  ? [stateChannel!.userIdentifiers[0], stateChannel!.userIdentifiers[1]]
-  : [getRandomPublicIdentifier(), getRandomPublicIdentifier()];
-  return {
-    identityHash: appIdentityHash,
-    initiatorIdentifier: initiator,
-    responderIdentifier: responder,
-    appDefinition: AddressZero,
-    abiEncodings: {
-      stateEncoding: "tuple(address foo, uint256 bar)",
-      actionEncoding: undefined,
-    } as AppABIEncodings,
-    initiatorDeposit: "0x00",
-    responderDeposit: "0x00",
-    defaultTimeout: "0x01",
-    stateTimeout: "0x00",
-    initialState: {
-      foo: AddressZero,
-      bar: 0,
-    } as SolidityValueType,
-    appSeqNo: stateChannel ? stateChannel.numProposedApps : Math.ceil(1000 * Math.random()),
-    outcomeType: OutcomeType.TWO_PARTY_FIXED_OUTCOME,
-    responderDepositAssetId: CONVENTION_FOR_ETH_ASSET_ID,
-    initiatorDepositAssetId: CONVENTION_FOR_ETH_ASSET_ID,
-  };
+export function createAppInstanceJsonForTest(
+  appIdentityHash: string,
+  stateChannel?: StateChannel,
+): AppInstanceJson {
+  return createAppInstanceForTest(stateChannel).toJson();
 }
 
 export function createAppInstanceForTest(stateChannel?: StateChannel) {
   const [initiator, responder] = stateChannel
     ? [stateChannel!.userIdentifiers[0], stateChannel!.userIdentifiers[1]]
     : [getRandomPublicIdentifier(), getRandomPublicIdentifier()];
-  return new AppInstance(
-    /* initiator */ initiator,
-    /* responder */ responder,
-    /* defaultTimeout */ "0x00",
-    /* appInterface */ {
-      addr: getAddress(hexlify(randomBytes(20))),
+  return AppInstance.fromJson({
+    multisigAddress: stateChannel!.multisigAddress || getRandomAddress(),
+    identityHash: "", // gets calculated
+    initiatorIdentifier: initiator,
+    initiatorDeposit: "0x00",
+    initiatorDepositAssetId: CONVENTION_FOR_ETH_ASSET_ID,
+    responderIdentifier: responder,
+    responderDeposit: "0x00",
+    responderDepositAssetId: CONVENTION_FOR_ETH_ASSET_ID,
+    appDefinition: AddressZero,
+    abiEncodings: {
       stateEncoding: "tuple(address foo, uint256 bar)",
       actionEncoding: undefined,
-    },
-    /* appSeqNo */ stateChannel ? stateChannel.numProposedApps : Math.ceil(1000 * Math.random()),
-    /* latestState */ { foo: AddressZero, bar: bigNumberify(0) },
-    /* latestVersionNumber */ 0,
-    /* stateTimeout */ toBN(Math.ceil(1000 * Math.random())).toHexString(),
-    /* outcomeType */ OutcomeType.TWO_PARTY_FIXED_OUTCOME,
-    /* multisig */ stateChannel
-      ? stateChannel.multisigAddress
-      : getAddress(hexlify(randomBytes(20))),
-    /* meta */ undefined,
-    /* latestAction */ undefined,
-    /* twoPartyOutcomeInterpreterParams */ {
+    } as AppABIEncodings,
+    defaultTimeout: "0x01",
+    stateTimeout: "0x00",
+    latestState: {
+      foo: AddressZero,
+      bar: 0,
+    } as SolidityValueType,
+    latestVersionNumber: 10,
+    appSeqNo: stateChannel ? stateChannel.numProposedApps : Math.ceil(1000 * Math.random()),
+    outcomeType: OutcomeType.TWO_PARTY_FIXED_OUTCOME,
+    outcomeInterpreterParameters: {
       playerAddrs: [AddressZero, AddressZero],
-      amount: Zero,
+      amount: bigNumberifyJson(Zero),
       tokenAddress: AddressZero,
     },
-    /* multiAssetMultiPartyCoinTransferInterpreterParams */ undefined,
-    /* singleAssetTwoPartyCoinTransferInterpreterParams */ undefined,
-  );
+  });
 }
 
 export async function requestDepositRights(
-  depositor: Node,
-  counterparty: Node,
+  depositor: CFCore,
+  counterparty: CFCore,
   multisigAddress: string,
   assetId: AssetId = CONVENTION_FOR_ETH_ASSET_ID,
 ) {
@@ -163,27 +136,27 @@ export async function requestDepositRights(
 }
 
 export async function rescindDepositRights(
-  node: Node,
-  counterparty: Node,
+  node: CFCore,
+  counterparty: CFCore,
   multisigAddress: string,
   assetId: AssetId = CONVENTION_FOR_ETH_ASSET_ID,
 ) {
   const apps = await getInstalledAppInstances(node, multisigAddress);
-  const depositApp = apps.filter(
+  const depositAppInstance = apps.filter(
     (app) =>
-      app.appInterface.addr === global[`network`][`DepositApp`] &&
+      app.appDefinition === DepositApp &&
       (app.latestState as DepositAppState).assetId === getAddressFromAssetId(assetId),
   )[0];
-  if (!depositApp) {
+  if (!depositAppInstance) {
     // no apps to uninstall, return
     return;
   }
   // uninstall
-  await uninstallApp(node, counterparty, depositApp.identityHash);
+  await uninstallApp(node, counterparty, depositAppInstance.identityHash, multisigAddress);
 }
 
 export async function getDepositApps(
-  node: Node,
+  node: CFCore,
   multisigAddr: string,
   tokenAddresses: string[] = [],
 ): Promise<AppInstanceJson[]> {
@@ -191,9 +164,7 @@ export async function getDepositApps(
   if (apps.length === 0) {
     return [];
   }
-  const depositApps = apps.filter(
-    (app) => app.appInterface.addr === global[`network`][`DepositApp`],
-  );
+  const depositApps = apps.filter((app) => app.appDefinition === DepositApp);
   if (tokenAddresses.length === 0) {
     return depositApps;
   }
@@ -211,8 +182,8 @@ export async function getDepositApps(
  * @param shouldExist array of keys to check existence of if value not known
  * for `expected` (e.g `appIdentityHash`s)
  */
-export function assertMessage(
-  msg: Message,
+export function assertMessage<T extends EventName>(
+  msg: ProtocolEventMessage<T>,
   expected: any, // should be partial of nested types
   shouldExist: string[] = [],
 ): void {
@@ -231,11 +202,11 @@ export function assertMessage(
 
 export function assertProposeMessage(
   senderId: string,
-  msg: ProposeMessage,
+  msg: ProtocolEventMessage<"PROPOSE_INSTALL_EVENT">,
   params: ProtocolParams.Propose,
 ) {
   const { multisigAddress, initiatorIdentifier, responderIdentifier, ...emittedParams } = params;
-  assertMessage(
+  assertMessage<"PROPOSE_INSTALL_EVENT">(
     msg,
     {
       from: senderId,
@@ -247,22 +218,20 @@ export function assertProposeMessage(
         },
       },
     },
-    [`data.appIdentityHash`],
+    [`data.appInstanceId`],
   );
 }
 
 export function assertInstallMessage(
   senderId: string,
-  msg: InstallMessage,
+  msg: ProtocolEventMessage<"INSTALL_EVENT">,
   appIdentityHash: string,
 ) {
-  assertMessage(msg, {
+  assertMessage<"INSTALL_EVENT">(msg, {
     from: senderId,
     type: `INSTALL_EVENT`,
     data: {
-      params: {
-        appIdentityHash,
-      },
+      appIdentityHash,
     },
   });
 }
@@ -273,14 +242,17 @@ export function assertInstallMessage(
  * ensure a channel has been instantiated and to get its multisig address
  * back in the event data.
  */
-export async function getMultisigCreationAddress(node: Node, addresss: string[]): Promise<string> {
+export const getMultisigCreationAddress = async (
+  node: CFCore,
+  addresss: string[],
+): Promise<string> => {
   const {
     result: {
       result: { multisigAddress },
     },
   } = await node.rpcRouter.dispatch(constructChannelCreationRpc(addresss));
   return multisigAddress;
-}
+};
 
 export function constructChannelCreationRpc(owners: string[]) {
   return {
@@ -298,7 +270,7 @@ export function constructChannelCreationRpc(owners: string[]) {
  * @param node
  * @returns list of multisig addresses
  */
-export async function getChannelAddresses(node: Node): Promise<Set<string>> {
+export async function getChannelAddresses(node: CFCore): Promise<Set<string>> {
   const {
     result: {
       result: { multisigAddresses },
@@ -313,7 +285,7 @@ export async function getChannelAddresses(node: Node): Promise<Set<string>> {
 }
 
 export async function getAppInstance(
-  node: Node,
+  node: CFCore,
   appIdentityHash: string,
 ): Promise<AppInstanceJson> {
   const {
@@ -331,11 +303,11 @@ export async function getAppInstance(
   return appInstance;
 }
 
-export async function getAppInstanceProposal(
-  node: Node,
+export async function getAppInstanceJson(
+  node: CFCore,
   appIdentityHash: string,
   multisigAddress: string,
-): Promise<AppInstanceProposal> {
+): Promise<AppInstanceJson> {
   const proposals = await getProposedAppInstances(node, multisigAddress);
   const candidates = proposals.filter((proposal) => proposal.identityHash === appIdentityHash);
 
@@ -351,7 +323,7 @@ export async function getAppInstanceProposal(
 }
 
 export async function getFreeBalanceState(
-  node: Node,
+  node: CFCore,
   multisigAddress: string,
   assetId: string = CONVENTION_FOR_ETH_ASSET_ID,
 ): Promise<MethodResults.GetFreeBalanceState> {
@@ -370,7 +342,7 @@ export async function getFreeBalanceState(
 }
 
 export async function getTokenIndexedFreeBalanceStates(
-  node: Node,
+  node: CFCore,
   multisigAddress: string,
 ): Promise<MethodResults.GetTokenIndexedFreeBalanceStates> {
   const {
@@ -387,7 +359,7 @@ export async function getTokenIndexedFreeBalanceStates(
 }
 
 export async function getInstalledAppInstances(
-  node: Node,
+  node: CFCore,
   multisigAddress: string,
 ): Promise<AppInstanceJson[]> {
   const rpc = {
@@ -401,9 +373,9 @@ export async function getInstalledAppInstances(
 }
 
 export async function getProposedAppInstances(
-  node: Node,
+  node: CFCore,
   multisigAddress: string,
-): Promise<AppInstanceProposal[]> {
+): Promise<AppInstanceJson[]> {
   const rpc = {
     id: Date.now(),
     methodName: MethodNames.chan_getProposedAppInstances,
@@ -421,9 +393,7 @@ export async function getMultisigBalance(
   const provider = global[`wallet`].provider;
   return tokenAddress === AddressZero
     ? await provider.getBalance(multisigAddr)
-    : await new Contract(tokenAddress, ERC20.abi as any, provider).functions.balanceOf(
-        multisigAddr,
-      );
+    : await new Contract(tokenAddress, ERC20.abi, provider).balanceOf(multisigAddr);
 }
 
 export async function getMultisigAmountWithdrawn(
@@ -431,13 +401,14 @@ export async function getMultisigAmountWithdrawn(
   tokenAddress: string = AddressZero,
 ) {
   const provider = global[`wallet`].provider;
-  const multisig = new Contract(multisigAddr, MinimumViableMultisig.abi as any, provider);
+  const multisig = new Contract(multisigAddr, MinimumViableMultisig.abi, provider);
   try {
-    return await multisig.functions.totalAmountWithdrawn(tokenAddress);
+    return await multisig.totalAmountWithdrawn(tokenAddress);
   } catch (e) {
     if (!e.message.includes(CONTRACT_NOT_DEPLOYED)) {
-      console.log(CONTRACT_NOT_DEPLOYED);
-      throw new Error(e);
+      if (!(e.message).toUpperCase().includes(CALL_EXCEPTION)) {
+        throw new Error(e);
+      }
     }
     // multisig is deployed on withdrawal, if not
     // deployed withdrawal amount is 0
@@ -489,14 +460,15 @@ export async function getProposeDepositAppParams(
     responderDepositAssetId: assetId,
     defaultTimeout: Zero,
     stateTimeout: Zero,
+    multisigAddress,
   };
 }
 
 export async function deposit(
-  node: Node,
+  node: CFCore,
   multisigAddress: string,
   amount: BigNumber = One,
-  responderNode: Node,
+  responderNode: CFCore,
   assetId: AssetId = CONVENTION_FOR_ETH_ASSET_ID,
 ) {
   // get rights
@@ -509,7 +481,7 @@ export async function deposit(
           value: amount,
           to: multisigAddress,
         })
-      : await new Contract(getAddressFromAssetId(assetId), ERC20.abi as any, wallet).transfer(
+      : await new Contract(getAddressFromAssetId(assetId), ERC20.abi, wallet).transfer(
           multisigAddress,
           amount,
         );
@@ -518,7 +490,7 @@ export async function deposit(
   await rescindDepositRights(node, responderNode, multisigAddress, assetId);
 }
 
-export async function deployStateDepositHolder(node: Node, multisigAddress: string) {
+export async function deployStateDepositHolder(node: CFCore, multisigAddress: string) {
   const response = await node.rpcRouter.dispatch({
     methodName: MethodNames.chan_deployStateDepositHolder,
     parameters: {
@@ -531,22 +503,29 @@ export async function deployStateDepositHolder(node: Node, multisigAddress: stri
   return result.transactionHash;
 }
 
-export function constructInstallRpc(appIdentityHash: string): Rpc {
+export function constructInstallRpc(appIdentityHash: string, multisigAddress: string): Rpc {
   return {
     id: Date.now(),
     methodName: MethodNames.chan_install,
     parameters: {
       appIdentityHash,
+      multisigAddress,
     } as MethodParams.Install,
   };
 }
 
-export function constructRejectInstallRpc(appIdentityHash: string): Rpc {
+export function constructRejectInstallRpc(
+  appIdentityHash: string,
+  multisigAddress: string,
+  reason: string = "Rejected",
+): Rpc {
   return {
     id: Date.now(),
     methodName: MethodNames.chan_rejectInstall,
     parameters: {
       appIdentityHash,
+      multisigAddress,
+      reason,
     } as MethodParams.RejectInstall,
   };
 }
@@ -580,41 +559,42 @@ export function constructAppProposalRpc(
       outcomeType,
       defaultTimeout,
       stateTimeout,
+      multisigAddress,
     } as MethodParams.ProposeInstall),
   };
 }
 
 /**
  * @param MethodParams.proposal The parameters of the installation proposal.
- * @param appInstanceProposal The proposed app instance contained in the Node.
+ * @param AppInstanceJson The proposed app instance contained in the Node.
  */
 export function confirmProposedAppInstance(
   methodParams: MethodParam,
-  appInstanceProposal: AppInstanceProposal,
+  AppInstanceJson: AppInstanceJson,
   nonInitiatingNode: boolean = false,
 ) {
   const proposalParams = methodParams as MethodParams.ProposeInstall;
-  expect(proposalParams.abiEncodings).toEqual(appInstanceProposal.abiEncodings);
-  expect(proposalParams.appDefinition).toEqual(appInstanceProposal.appDefinition);
+  expect(proposalParams.abiEncodings).toEqual(AppInstanceJson.abiEncodings);
+  expect(proposalParams.appDefinition).toEqual(AppInstanceJson.appDefinition);
 
   if (nonInitiatingNode) {
     expect(proposalParams.initiatorDeposit).toEqual(
-      bigNumberify(appInstanceProposal.responderDeposit),
+      BigNumber.from(AppInstanceJson.responderDeposit),
     );
     expect(proposalParams.responderDeposit).toEqual(
-      bigNumberify(appInstanceProposal.initiatorDeposit),
+      BigNumber.from(AppInstanceJson.initiatorDeposit),
     );
   } else {
     expect(proposalParams.initiatorDeposit).toEqual(
-      bigNumberify(appInstanceProposal.initiatorDeposit),
+      BigNumber.from(AppInstanceJson.initiatorDeposit),
     );
     expect(proposalParams.responderDeposit).toEqual(
-      bigNumberify(appInstanceProposal.responderDeposit),
+      BigNumber.from(AppInstanceJson.responderDeposit),
     );
   }
 
-  expect(proposalParams.defaultTimeout).toEqual(toBN(appInstanceProposal.defaultTimeout));
-  expect(proposalParams.stateTimeout).toEqual(toBN(appInstanceProposal.stateTimeout));
+  expect(proposalParams.defaultTimeout).toEqual(toBN(AppInstanceJson.defaultTimeout));
+  expect(proposalParams.stateTimeout).toEqual(toBN(AppInstanceJson.stateTimeout));
 
   // TODO: uncomment when getState is implemented
   // expect(proposalParams.initialState).toEqual(appInstanceInitialState);
@@ -630,11 +610,16 @@ export function constructGetStateChannelRpc(multisigAddress: string): Rpc {
   };
 }
 
-export function constructTakeActionRpc(appIdentityHash: string, action: any): Rpc {
+export function constructTakeActionRpc(
+  appIdentityHash: string,
+  multisigAddress: string,
+  action: any,
+): Rpc {
   return {
     parameters: deBigNumberifyJson({
       appIdentityHash,
       action,
+      multisigAddress,
     } as MethodParams.TakeAction),
     id: Date.now(),
     methodName: MethodNames.chan_takeAction,
@@ -649,10 +634,16 @@ export function constructGetAppsRpc(multisigAddress: string): Rpc {
   };
 }
 
-export function constructUninstallRpc(appIdentityHash: string): Rpc {
+export function constructUninstallRpc(
+  appIdentityHash: string,
+  multisigAddress: string,
+  action?: SolidityValueType,
+): Rpc {
   return {
     parameters: {
       appIdentityHash,
+      multisigAddress,
+      action,
     } as MethodParams.Uninstall,
     id: Date.now(),
     methodName: MethodNames.chan_uninstall,
@@ -661,8 +652,8 @@ export function constructUninstallRpc(appIdentityHash: string): Rpc {
 
 export async function collateralizeChannel(
   multisigAddress: string,
-  node1: Node,
-  node2: Node,
+  node1: CFCore,
+  node2: CFCore,
   amount: BigNumber = One,
   assetId: string = CONVENTION_FOR_ETH_ASSET_ID,
   collateralizeNode2: boolean = true,
@@ -673,12 +664,12 @@ export async function collateralizeChannel(
   }
 }
 
-export async function createChannel(nodeA: Node, nodeB: Node): Promise<string> {
+export async function createChannel(nodeA: CFCore, nodeB: CFCore): Promise<string> {
   const sortedOwners = [nodeA.signerAddress, nodeB.signerAddress];
   const [multisigAddress]: any = await Promise.all([
     new Promise(async (resolve) => {
-      nodeB.once(EventNames.CREATE_CHANNEL_EVENT, async (msg: CreateChannelMessage) => {
-        assertMessage(
+      nodeB.once(EventNames.CREATE_CHANNEL_EVENT, async (msg) => {
+        assertMessage<typeof EventNames.CREATE_CHANNEL_EVENT>(
           msg,
           {
             from: nodeA.publicIdentifier,
@@ -694,8 +685,8 @@ export async function createChannel(nodeA: Node, nodeB: Node): Promise<string> {
       });
     }),
     new Promise((resolve) => {
-      nodeA.once(EventNames.CREATE_CHANNEL_EVENT, (msg: CreateChannelMessage) => {
-        assertMessage(
+      nodeA.once(EventNames.CREATE_CHANNEL_EVENT, (msg) => {
+        assertMessage<typeof EventNames.CREATE_CHANNEL_EVENT>(
           msg,
           {
             from: nodeA.publicIdentifier,
@@ -719,8 +710,8 @@ export async function createChannel(nodeA: Node, nodeB: Node): Promise<string> {
 
 // NOTE: Do not run this concurrently, it won't work
 export async function installApp(
-  nodeA: Node,
-  nodeB: Node,
+  nodeA: CFCore,
+  nodeB: CFCore,
   multisigAddress: string,
   appDefinition: string,
   initialState?: SolidityValueType,
@@ -775,33 +766,31 @@ export async function installApp(
   };
 
   const appIdentityHash: string = await new Promise(async (resolve) => {
-    nodeB.once(`PROPOSE_INSTALL_EVENT`, async (msg: ProposeMessage) => {
+    nodeB.once(`PROPOSE_INSTALL_EVENT`, async (msg) => {
       // assert message
       assertProposeMessage(nodeA.publicIdentifier, msg, proposedParams);
-      const {
-        data: { appIdentityHash },
-      } = msg;
       // Sanity-check
       confirmProposedAppInstance(
         installationProposalRpc.parameters,
-        await getAppInstanceProposal(nodeB, appIdentityHash, multisigAddress),
+        await getAppInstanceJson(nodeB, msg.data.appInstanceId, multisigAddress),
       );
-      resolve(msg.data.appIdentityHash);
+      resolve(msg.data.appInstanceId);
     });
 
     await nodeA.rpcRouter.dispatch(installationProposalRpc);
-    confirmProposedAppInstance(
-      installationProposalRpc.parameters,
-      await getAppInstanceProposal(nodeA, appIdentityHash, multisigAddress),
-    );
   });
+
+  confirmProposedAppInstance(
+    installationProposalRpc.parameters,
+    await getAppInstanceJson(nodeA, appIdentityHash, multisigAddress),
+  );
 
   // send nodeB install call
   await Promise.all([
-    nodeB.rpcRouter.dispatch(constructInstallRpc(appIdentityHash)),
+    nodeB.rpcRouter.dispatch(constructInstallRpc(appIdentityHash, multisigAddress)),
     new Promise(async (resolve) => {
-      nodeA.on(EventNames.INSTALL_EVENT, async (msg: InstallMessage) => {
-        if (msg.data.params.appIdentityHash === appIdentityHash) {
+      nodeA.on(EventNames.INSTALL_EVENT, async (msg) => {
+        if (msg.data.appIdentityHash === appIdentityHash) {
           // assert message
           assertInstallMessage(nodeB.publicIdentifier, msg, appIdentityHash);
           const appInstanceNodeA = await getAppInstance(nodeA, appIdentityHash);
@@ -834,8 +823,8 @@ export async function installApp(
 }
 
 export async function confirmChannelCreation(
-  nodeA: Node,
-  nodeB: Node,
+  nodeA: CFCore,
+  nodeB: CFCore,
   data: MethodResults.CreateChannel,
   owners: Address[], // free balance addr[]
 ) {
@@ -854,20 +843,24 @@ export async function confirmAppInstanceInstallation(
   appInstance: AppInstanceJson,
 ) {
   const params = bigNumberifyJson(proposedParams) as ProtocolParams.Propose;
-  expect(appInstance.appInterface.addr).toEqual(params.appDefinition);
-  expect(appInstance.appInterface.stateEncoding).toEqual(params.abiEncodings.stateEncoding);
-  expect(appInstance.appInterface.actionEncoding).toEqual(params.abiEncodings.actionEncoding);
+  expect(appInstance.appDefinition).toEqual(params.appDefinition);
+  expect(appInstance.abiEncodings.stateEncoding).toEqual(params.abiEncodings.stateEncoding);
+  expect(appInstance.abiEncodings.actionEncoding).toEqual(params.abiEncodings.actionEncoding);
   expect(appInstance.defaultTimeout).toEqual(params.defaultTimeout.toHexString());
   expect(appInstance.stateTimeout).toEqual(params.stateTimeout.toHexString());
   expect(appInstance.latestState).toEqual(params.initialState);
 }
 
-export async function makeInstallCall(node: Node, appIdentityHash: string) {
-  return node.rpcRouter.dispatch(constructInstallRpc(appIdentityHash));
+export async function makeInstallCall(
+  node: CFCore,
+  appIdentityHash: string,
+  multisigAddress: string,
+) {
+  return node.rpcRouter.dispatch(constructInstallRpc(appIdentityHash, multisigAddress));
 }
 
 export function makeProposeCall(
-  nodeB: Node,
+  nodeB: CFCore,
   appDefinition: string,
   multisigAddress: string,
   initialState?: SolidityValueType,
@@ -891,8 +884,8 @@ export function makeProposeCall(
 }
 
 export async function makeAndSendProposeCall(
-  nodeA: Node,
-  nodeB: Node,
+  nodeA: CFCore,
+  nodeB: CFCore,
   appDefinition: string,
   multisigAddress: string,
   initialState?: SolidityValueType,
@@ -932,15 +925,15 @@ export async function makeAndSendProposeCall(
  */
 export async function transferERC20Tokens(
   toAddress: string,
-  tokenAddress: string = global[`network`][`DolphinCoin`],
-  contractABI: ContractABI = DolphinCoin.abi,
+  tokenAddress: string = DolphinCoin,
+  contractABI: ContractABI = ERC20.abi as any,
   amount: BigNumber = One,
 ): Promise<BigNumber> {
   const deployerAccount = global["wallet"];
   const contract = new Contract(tokenAddress, contractABI, deployerAccount);
-  const balanceBefore: BigNumber = await contract.functions.balanceOf(toAddress);
-  await contract.functions.transfer(toAddress, amount);
-  const balanceAfter: BigNumber = await contract.functions.balanceOf(toAddress);
+  const balanceBefore: BigNumber = await contract.balanceOf(toAddress);
+  await contract.transfer(toAddress, amount);
+  const balanceAfter: BigNumber = await contract.balanceOf(toAddress);
   expect(balanceAfter.sub(balanceBefore)).toEqual(amount);
   return balanceAfter;
 }
@@ -951,14 +944,6 @@ export function getAppContext(
   senderAddress?: string, // needed for both types of transfer apps
   receiverAddress?: string, // needed for both types of transfer apps
 ): AppContext {
-  const checkForAddresses = () => {
-    const missingAddr = !senderAddress || !receiverAddress;
-    if (missingAddr && !initialState) {
-      throw new Error(
-        `Must have sender and redeemer addresses to generate initial state for either transfer app context`,
-      );
-    }
-  };
   const checkForInitialState = () => {
     if (!initialState) {
       throw new Error(`Must have initial state to generate app context`);
@@ -974,36 +959,6 @@ export function getAppContext(
         outcomeType: OutcomeType.TWO_PARTY_FIXED_OUTCOME,
       };
 
-    case UnidirectionalTransferApp:
-      checkForAddresses();
-      return {
-        appDefinition,
-        initialState: initialState || initialTransferState(senderAddress!, receiverAddress!),
-        abiEncodings: transferAbiEncodings,
-        outcomeType: OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER,
-      };
-
-    case UnidirectionalLinkedTransferApp:
-      checkForAddresses();
-      // TODO: need a better way to return the action info that generated
-      // the linked hash as well
-      const { state } = initialLinkedState(senderAddress!, receiverAddress!);
-      return {
-        appDefinition,
-        initialState: initialState || state,
-        abiEncodings: linkedAbiEncodings,
-        outcomeType: OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER,
-      };
-
-    case SimpleTransferApp:
-      checkForAddresses();
-      return {
-        appDefinition,
-        initialState: initialState || initialSimpleTransferState(senderAddress!, receiverAddress!),
-        abiEncodings: simpleTransferAbiEncodings,
-        outcomeType: OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER,
-      };
-
     case DepositApp:
       checkForInitialState();
       return {
@@ -1016,23 +971,44 @@ export function getAppContext(
         outcomeType: OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER,
       };
 
+    case SimpleLinkedTransferApp: {
+      checkForInitialState();
+      return {
+        appDefinition,
+        initialState: initialState!,
+        abiEncodings: {
+          stateEncoding: SimpleLinkedTransferAppStateEncoding,
+          actionEncoding: SimpleLinkedTransferAppActionEncoding,
+        },
+        outcomeType: OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER,
+      };
+    }
+
     default:
       throw new Error(`Proposing the specified app is not supported: ${appDefinition}`);
   }
 }
 
-export async function takeAppAction(node: Node, appIdentityHash: string, action: any) {
-  const res = await node.rpcRouter.dispatch(constructTakeActionRpc(appIdentityHash, action));
+export async function takeAppAction(
+  node: CFCore,
+  appIdentityHash: string,
+  multisigAddress: string,
+  action: any,
+) {
+  const res = await node.rpcRouter.dispatch(
+    constructTakeActionRpc(appIdentityHash, action, multisigAddress),
+  );
   return res.result.result;
 }
 
 export async function uninstallApp(
-  node: Node,
-  counterparty: Node,
+  node: CFCore,
+  counterparty: CFCore,
   appIdentityHash: string,
+  multisigAddress: string,
 ): Promise<string> {
   await Promise.all([
-    node.rpcRouter.dispatch(constructUninstallRpc(appIdentityHash)),
+    node.rpcRouter.dispatch(constructUninstallRpc(appIdentityHash, multisigAddress)),
     new Promise((resolve) => {
       counterparty.once(EventNames.UNINSTALL_EVENT, (msg: UninstallMessage) => {
         expect(msg.data.appIdentityHash).toBe(appIdentityHash);
@@ -1043,14 +1019,14 @@ export async function uninstallApp(
   return appIdentityHash;
 }
 
-export async function getApps(node: Node, multisigAddress: string): Promise<AppInstanceJson[]> {
+export async function getApps(node: CFCore, multisigAddress: string): Promise<AppInstanceJson[]> {
   return (await node.rpcRouter.dispatch(constructGetAppsRpc(multisigAddress))).result.result
     .appInstances;
 }
 
 export async function getBalances(
-  nodeA: Node,
-  nodeB: Node,
+  nodeA: CFCore,
+  nodeB: CFCore,
   multisigAddress: string,
   assetId: AssetId,
 ): Promise<[BigNumber, BigNumber]> {

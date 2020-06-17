@@ -47,14 +47,14 @@ docker run \
   --network="$network" \
   --rm \
   --tmpfs="/data" \
-  trufflesuite/ganache-cli:v6.7.0 \
+  trufflesuite/ganache-cli:v6.9.1 \
     --db="/data" \
     --defaultBalanceEther="10000" \
     --gasLimit="9000000000" \
     --gasPrice="1000000000" \
     --host="0.0.0.0" \
     --mnemonic="$eth_mnemonic" \
-    --networkId="4447" \
+    --networkId="1337" \
     --port="$ethprovider_port"
 
 docker run \

@@ -1,20 +1,11 @@
-import { SIGNED_TRANSFER_STATE_TIMEOUT } from "@connext/apps";
 import {
-  Bytes32,
-  NodeResponses,
   SignedTransferStatus,
   SimpleSignedTransferAppName,
   SimpleSignedTransferAppState,
-  Address,
 } from "@connext/types";
-import { bigNumberifyJson, getSignerAddressFromPublicIdentifier, stringify } from "@connext/utils";
+import { bigNumberifyJson } from "@connext/utils";
 import { Injectable } from "@nestjs/common";
-import { Zero } from "ethers/constants";
-
 import { CFCoreService } from "../cfCore/cfCore.service";
-import { ChannelRepository } from "../channel/channel.repository";
-import { ChannelService, RebalanceType } from "../channel/channel.service";
-import { DepositService } from "../deposit/deposit.service";
 import { LoggerService } from "../logger/logger.service";
 import { AppType, AppInstance } from "../appInstance/appInstance.entity";
 import { SignedTransferRepository } from "./signedTransfer.repository";
@@ -29,13 +20,16 @@ const appStatusesToSignedTransferStatus = (
   // pending iff no receiver app + not expired
   if (!receiverApp) {
     return SignedTransferStatus.PENDING;
-  } else if (senderApp.latestState.finalized || receiverApp.latestState.finalized) {
-    // iff sender uninstalled, payment is unlocked
+  } else if (senderApp.type === AppType.UNINSTALLED || receiverApp.type === AppType.UNINSTALLED) {
     return SignedTransferStatus.COMPLETED;
   } else if (senderApp.type === AppType.REJECTED || receiverApp.type === AppType.REJECTED) {
     return SignedTransferStatus.FAILED;
   } else {
-    throw new Error(`Cound not determine hash lock transfer status`);
+    throw new Error(
+      `Could not determine signed transfer status. Sender app type: ${
+        senderApp && senderApp.type
+      }, receiver app type: ${receiverApp && receiverApp.type}`,
+    );
   }
 };
 
@@ -54,132 +48,10 @@ export const normalizeSignedTransferAppState = (
 export class SignedTransferService {
   constructor(
     private readonly cfCoreService: CFCoreService,
-    private readonly channelService: ChannelService,
-    private readonly depositService: DepositService,
     private readonly log: LoggerService,
-    private readonly channelRepository: ChannelRepository,
     private readonly signedTransferRepository: SignedTransferRepository,
   ) {
     this.log.setContext("SignedTransferService");
-  }
-
-  async installSignedTransferReceiverApp(
-    userIdentifier: Address,
-    paymentId: Bytes32,
-  ): Promise<NodeResponses.ResolveSignedTransfer> {
-    this.log.info(
-      `installSignedTransferReceiverApp for ${userIdentifier} paymentId ${paymentId} started`,
-    );
-    const receiverChannel = await this.channelRepository.findByUserPublicIdentifierOrThrow(
-      userIdentifier,
-    );
-
-    // TODO: could there be more than 1? how to handle that case?
-    let [senderAppBadType] = await this.signedTransferRepository.findSignedTransferAppsByPaymentId(
-      paymentId,
-    );
-    if (!senderAppBadType) {
-      throw new Error(`No sender app installed for paymentId: ${paymentId}`);
-    }
-
-    const senderChannel = await this.channelRepository.findByMultisigAddressOrThrow(
-      senderAppBadType.channel.multisigAddress,
-    );
-    const senderApp = normalizeSignedTransferAppState(senderAppBadType);
-
-    const assetId = senderApp.outcomeInterpreterParameters.tokenAddress;
-
-    // sender amount
-    const amount = senderApp.latestState.coinTransfers[0].amount;
-
-    const existing = await this.findReceiverAppByPaymentId(paymentId);
-    if (existing) {
-      const result: NodeResponses.ResolveSignedTransfer = {
-        appIdentityHash: existing.identityHash,
-        sender: senderChannel.userIdentifier,
-        meta: existing.meta,
-        amount,
-        assetId,
-      };
-      this.log.warn(`Found existing signed transfer app, returning: ${stringify(result)}`);
-      return result;
-    }
-
-    const freeBalanceAddr = this.cfCoreService.cfCore.signerAddress;
-
-    const freeBal = await this.cfCoreService.getFreeBalance(
-      userIdentifier,
-      receiverChannel.multisigAddress,
-      assetId,
-    );
-
-    if (freeBal[freeBalanceAddr].lt(amount)) {
-      // request collateral and wait for deposit to come through
-      const deposit = await this.channelService.getCollateralAmountToCoverPaymentAndRebalance(
-        userIdentifier,
-        assetId,
-        amount,
-        freeBal[freeBalanceAddr],
-      );
-      // request collateral and wait for deposit to come through
-      const depositReceipt = await this.depositService.deposit(receiverChannel, deposit, assetId);
-      if (!depositReceipt) {
-        throw new Error(
-          `Could not deposit sufficient collateral to resolve linked transfer for reciever: ${userIdentifier}`,
-        );
-      }
-    }
-
-    const initialState: SimpleSignedTransferAppState = {
-      coinTransfers: [
-        {
-          amount,
-          to: freeBalanceAddr,
-        },
-        {
-          amount: Zero,
-          to: getSignerAddressFromPublicIdentifier(userIdentifier),
-        },
-      ],
-      paymentId,
-      signer: senderApp.latestState.signer,
-      finalized: false,
-    };
-
-    const meta = { ...senderApp.meta, sender: senderChannel.userIdentifier };
-    const receiverAppInstallRes = await this.cfCoreService.proposeAndWaitForInstallApp(
-      receiverChannel,
-      initialState,
-      amount,
-      assetId,
-      Zero,
-      assetId,
-      SimpleSignedTransferAppName,
-      meta,
-      SIGNED_TRANSFER_STATE_TIMEOUT,
-    );
-
-    if (!receiverAppInstallRes || !receiverAppInstallRes.appIdentityHash) {
-      throw new Error(`Could not install app on receiver side.`);
-    }
-
-    const result: NodeResponses.ResolveSignedTransfer = {
-      appIdentityHash: receiverAppInstallRes.appIdentityHash,
-      sender: senderChannel.userIdentifier,
-      meta,
-      amount,
-      assetId,
-    };
-
-    // kick off a rebalance before finishing
-    this.channelService.rebalance(receiverChannel, assetId);
-
-    this.log.info(
-      `installSignedTransferReceiverApp for ${userIdentifier} paymentId ${paymentId} complete: ${JSON.stringify(
-        result,
-      )}`,
-    );
-    return result;
   }
 
   async findSenderAndReceiverAppsWithStatus(

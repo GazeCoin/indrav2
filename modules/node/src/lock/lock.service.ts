@@ -1,107 +1,73 @@
+import { abbreviate } from "@connext/utils";
 import { Inject, Injectable } from "@nestjs/common";
-import Redlock, { Lock } from "redlock";
+import Redis from "ioredis";
 
-import { LOCK_SERVICE_TTL, RedlockProviderId } from "../constants";
+import { LOCK_SERVICE_TTL, RedisProviderId } from "../constants";
 import { LoggerService } from "../logger/logger.service";
+import { MemoLock } from "./memo-lock";
 
 @Injectable()
 export class LockService {
+
+  // This var is only used for logging diagnostic info, not to actually enforce anything
+  private locks: { [lockName: string]: number } = {};
+
+  private connected: boolean = false;
+
+  private connecting: Promise<void>|null = null;
+
+  private memoLock: MemoLock;
+
   constructor(
     private readonly log: LoggerService,
-    @Inject(RedlockProviderId) private readonly redlockClient: Redlock,
+    @Inject(RedisProviderId) private readonly redis: Redis.Redis,
   ) {
     this.log.setContext("LockService");
+    this.memoLock = new MemoLock(log, redis, 50, LOCK_SERVICE_TTL, 1000);
   }
 
-  async lockedOperation(
-    lockName: string,
-    callback: (...args: any[]) => any,
-    timeout: number,
-  ): Promise<any> {
-    const hardcodedTTL = LOCK_SERVICE_TTL;
-    this.log.debug(`Using lock ttl of ${hardcodedTTL / 1000} seconds`);
-    this.log.info(`Acquiring lock for ${lockName} ${Date.now()}`);
-    return new Promise((resolve: any, reject: any): any => {
-      this.redlockClient
-        .lock(lockName, hardcodedTTL)
-        .then(async (lock: Redlock.Lock) => {
-          const acquiredAt = Date.now();
-          this.log.info(`Acquired lock at ${acquiredAt} for ${lockName}:`);
-          let retVal: any;
-          try {
-            // run callback
-            retVal = await callback();
-            // return
-          } catch (e) {
-            // TODO: check exception... if the lock failed
-            this.log.error(`Failed to execute callback while lock is held: ${e.message}`, e.stack);
-          } finally {
-            // unlock
-            this.log.info(`Releasing lock for ${lock.resource} with secret ${lock.value}`);
-            lock
-              .unlock()
-              .then(() => resolve(retVal))
-              .catch((e: any) => {
-                const acquisitionDelta = Date.now() - acquiredAt;
-                if (acquisitionDelta < hardcodedTTL) {
-                  this.log.error(
-                    `Failed to release lock after ${acquisitionDelta}ms: ${e.message}`,
-                    e.stack,
-                  );
-                  reject(e);
-                } else {
-                  this.log.debug(`Failed to release the lock due to expired ttl: ${e}; `);
-                  if (retVal) resolve(retVal);
+  async acquireLock(lockName: string): Promise<string> {
+    if (!this.connected) {
+      await this.connect();
+    }
 
-                  this.log.error(
-                    `No return value found from task with lockName: ${lockName}, and failed to release due to expired ttl: ${e.message}`,
-                    e.stack,
-                  );
-                  reject(e);
-                }
-              });
-          }
-        })
-        .catch((e: any) => {
-          this.log.error(`Failed to acquire the lock: ${e.message}`, e.stack);
-          reject(e);
-        });
-    });
-  }
+    if (this.locks[lockName]) {
+      const locks = Object.keys(this.locks).map(n => abbreviate(n));
+      this.log.warn(`Waiting on lock for ${lockName} (locked: ${locks})`);
+    } else {
+      this.log.info(`Acquiring lock for ${lockName} (TTL: ${LOCK_SERVICE_TTL} ms)`);
+    }
 
-  async acquireLock(lockName: string, lockTTL: number = LOCK_SERVICE_TTL): Promise<string> {
-    const hardcodedTTL = LOCK_SERVICE_TTL;
-    this.log.debug(`Using lock ttl of ${hardcodedTTL / 1000} seconds`);
-    this.log.info(`Acquiring lock for ${lockName} at ${Date.now()}`);
-    return new Promise((resolve: any, reject: any): any => {
-      this.redlockClient
-        .lock(lockName, hardcodedTTL)
-        .then((lock: Lock) => {
-          this.log.info(`Acquired lock for ${lock.resource} with secret ${lock.value}`);
-          resolve(lock.value);
-        })
-        .catch((e: any) => {
-          this.log.error(`Caught error locking resource ${lockName}`, e.stack);
-          reject(e);
-        });
-    });
+    const start = Date.now();
+    try {
+      const val = await this.memoLock.acquireLock(lockName);
+      this.log.info(`Acquired lock for ${lockName} (value ${val}) after waiting ${Date.now() - start} ms`);
+      this.locks[lockName] = start;
+      return val;
+    } catch (e) {
+      this.log.error(`Failed to lock resource ${lockName}: ${e.message}`);
+      throw e;
+    }
   }
 
   async releaseLock(lockName: string, lockValue: string): Promise<void> {
-    this.log.warn(`Releasing lock for ${lockName} at ${Date.now()} with secret ${lockValue}`);
-    return new Promise((resolve: any, reject: any): any => {
-      this.redlockClient
-        // "trick" the library into unlocking by construciing an object that contains
-        // only the parameters in the Lock object that are used in the unlock function
-        .unlock({ resource: lockName, value: lockValue } as Lock)
-        .then(() => {
-          this.log.info(`Released lock for ${lockName}`);
-          resolve();
-        })
-        .catch((e: any) => {
-          this.log.error(`Caught error unlocking resource ${lockName}: ${e.message}`, e.stack);
-          reject(e);
-        });
-    });
+    this.log.info(`Releasing lock for ${lockName} after ${Date.now() - this.locks[lockName]} ms`);
+    try {
+      await this.memoLock.releaseLock(lockName, lockValue);
+      this.log.info(`Done releasing lock for ${lockName}`);
+    } catch (e) {
+      this.log.error(`Error unlocking resource ${lockName} (${lockValue}): ${e.stack}`);
+    } finally {
+      delete this.locks[lockName];
+    }
+  }
+
+  private async connect(): Promise<void> {
+    if (this.connecting) {
+      return this.connecting;
+    }
+    this.connecting = this.memoLock.setupSubs();
+    await this.connecting;
+    this.connected = true;
   }
 }

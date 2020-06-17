@@ -3,6 +3,7 @@ import { HashLockTransferAppState, NodeResponses } from "@connext/types";
 import { bigNumberifyJson } from "@connext/utils";
 import { FactoryProvider } from "@nestjs/common/interfaces";
 import { RpcException } from "@nestjs/microservices";
+import { constants } from "ethers";
 
 import { AuthService } from "../auth/auth.service";
 import { LoggerService } from "../logger/logger.service";
@@ -12,7 +13,8 @@ import { ChannelRepository } from "../channel/channel.repository";
 import { AbstractMessagingProvider } from "../messaging/abstract.provider";
 
 import { HashLockTransferService } from "./hashLockTransfer.service";
-import { AddressZero } from "ethers/constants";
+
+const { AddressZero } = constants;
 
 export class HashLockTransferMessaging extends AbstractMessagingProvider {
   constructor(
@@ -45,23 +47,38 @@ export class HashLockTransferMessaging extends AbstractMessagingProvider {
       lockHash,
       assetId || AddressZero,
     );
-    if (!senderApp) {
+    if (!senderApp && !receiverApp) {
       return undefined;
     }
 
-    const latestState = bigNumberifyJson(senderApp.latestState) as HashLockTransferAppState;
-    const { encryptedPreImage, recipient, ...meta } = senderApp.meta || ({} as any);
+    let userApp;
+    if (pubId === receiverApp?.responderIdentifier) {
+      userApp = receiverApp;
+    } else if (pubId === senderApp?.initiatorIdentifier) {
+      userApp = senderApp;
+    } else {
+      this.log.error(
+        `Cannot get hashlock transfer app for third party. Requestor pubId: ${pubId}, 
+        sender pubId: ${senderApp?.initiatorIdentifier}, receiver pubId: ${receiverApp?.responderIdentifier}`,
+      );
+      return undefined;
+    }
+
+    const latestState = bigNumberifyJson(userApp.latestState) as HashLockTransferAppState;
+    const { encryptedPreImage, recipient, ...meta } = userApp.meta || ({} as any);
     const amount = latestState.coinTransfers[0].amount.isZero()
       ? latestState.coinTransfers[1].amount
       : latestState.coinTransfers[0].amount;
     return {
-      receiverIdentifier: receiverApp ? receiverApp.responderIdentifier : undefined,
-      senderIdentifier: senderApp.initiatorIdentifier,
-      assetId: senderApp.initiatorDepositAssetId,
+      receiverIdentifier: recipient,
+      senderIdentifier: meta.sender,
+      assetId: userApp.initiatorDepositAssetId,
       amount: amount.toString(),
       lockHash: latestState.lockHash,
-      status: status,
+      status,
       meta,
+      preImage: receiverApp?.latestState?.preImage === AddressZero ? userApp.latestState.preImage : receiverApp?.latestState?.preImage,
+      expiry: latestState.expiry,
     };
   }
 

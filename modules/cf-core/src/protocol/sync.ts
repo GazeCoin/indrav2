@@ -1,13 +1,13 @@
 import {
+  ConditionalTransactionCommitmentJSON,
+  IStoreService,
   Opcode,
   ProtocolMessageData,
   ProtocolNames,
   ProtocolParams,
-  StateChannelJSON,
-  SetStateCommitmentJSON,
-  IStoreService,
-  ConditionalTransactionCommitmentJSON,
   ProtocolRoles,
+  SetStateCommitmentJSON,
+  StateChannelJSON,
 } from "@connext/types";
 import {
   logTime,
@@ -16,19 +16,12 @@ import {
   getSignerAddressFromPublicIdentifier,
   recoverAddressFromChannelMessage,
 } from "@connext/utils";
-
 import { UNASSIGNED_SEQ_NO } from "../constants";
-import { StateChannel, AppInstance, FreeBalanceClass } from "../models";
+import { StateChannel, FreeBalanceClass, AppInstance } from "../models";
 import { Context, ProtocolExecutionFlow, PersistStateChannelType } from "../types";
 
 import { stateChannelClassFromStoreByMultisig, assertIsValidSignature } from "./utils";
-import {
-  getSetStateCommitment,
-  SetStateCommitment,
-  ConditionalTransactionCommitment,
-} from "../ethereum";
-import { keccak256, defaultAbiCoder } from "ethers/utils";
-import { computeInterpreterParameters } from "./install";
+import { SetStateCommitment, ConditionalTransactionCommitment } from "../ethereum";
 
 const protocol = ProtocolNames.sync;
 const { IO_SEND, IO_SEND_AND_WAIT, PERSIST_STATE_CHANNEL, OP_SIGN, OP_VALIDATE } = Opcode;
@@ -103,17 +96,32 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
     } = m2!;
 
     const responderChannel = StateChannel.fromJson(responderChannelJson);
+    let postSyncStateChannel = StateChannel.fromJson(preProtocolStateChannel.toJson());
 
     const syncType = needsSyncFromCounterparty(preProtocolStateChannel, responderChannel);
+    log.info(`[${processID}] Syncing channel with type: ${syncType}`);
     substart = Date.now();
     switch (syncType) {
+      case PersistStateChannelType.SyncNumProposedApps: {
+        const proposalSync = await syncNumProposedApps(postSyncStateChannel, responderChannel);
+        if (proposalSync) {
+          yield [
+            PERSIST_STATE_CHANNEL,
+            PersistStateChannelType.SyncNumProposedApps,
+            proposalSync.updatedChannel,
+          ];
+          postSyncStateChannel = StateChannel.fromJson(proposalSync!.updatedChannel.toJson());
+        }
+        logTime(log, substart, `[${processID}] Synced number of proposed apps with responder`);
+        break;
+      }
       case PersistStateChannelType.SyncProposal: {
         // sync and save all proposals
         const proposalSync = await syncUntrackedProposals(
-          preProtocolStateChannel,
+          postSyncStateChannel,
           responderChannel,
           responderSetStateCommitments,
-          context,
+          responderConditionalCommitments,
           ourIdentifier,
         );
         yield [
@@ -122,12 +130,13 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
           proposalSync!.updatedChannel,
           proposalSync!.commitments,
         ];
+        postSyncStateChannel = StateChannel.fromJson(proposalSync!.updatedChannel.toJson());
         logTime(log, substart, `[${processID}] Synced proposals with responder`);
         break;
       }
       case PersistStateChannelType.SyncFreeBalance: {
         const freeBalanceSync = await syncFreeBalanceState(
-          preProtocolStateChannel,
+          postSyncStateChannel,
           setStateCommitments,
           responderChannel,
           responderSetStateCommitments,
@@ -139,13 +148,15 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
           PersistStateChannelType.SyncFreeBalance,
           freeBalanceSync!.updatedChannel,
           freeBalanceSync!.commitments,
+          freeBalanceSync!.appContext,
         ];
+        postSyncStateChannel = StateChannel.fromJson(freeBalanceSync!.updatedChannel.toJson());
         logTime(log, substart, `[${processID}] Synced free balance with responder`);
         break;
       }
       case PersistStateChannelType.SyncAppInstances: {
         const appSync = await syncAppStates(
-          preProtocolStateChannel,
+          postSyncStateChannel,
           responderChannel,
           responderSetStateCommitments,
           ourIdentifier,
@@ -153,7 +164,12 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
 
         const { commitments, updatedChannel } = appSync!;
 
-        let doubleSigned: SetStateCommitment[] = [];
+        // update the channel with any double signed commitments
+        if (updatedChannel) {
+          postSyncStateChannel = StateChannel.fromJson(updatedChannel.toJson());
+        }
+
+        const doubleSigned: SetStateCommitment[] = [];
         // process single-signed commitments
         for (const commitment of commitments) {
           if (commitment.signatures.length === 2) {
@@ -162,17 +178,17 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
           }
 
           const responderApp = responderChannel.appInstances.get(commitment.appIdentityHash)!;
-          const app = updatedChannel!.appInstances.get(commitment.appIdentityHash)!;
+          const app = postSyncStateChannel.appInstances.get(commitment.appIdentityHash)!;
 
           // signature has been validated, add our signature
-          yield [
+          const error = yield [
             OP_VALIDATE,
             ProtocolNames.takeAction,
             {
               params: {
                 initiatorIdentifier: responderIdentifier, // from *this* protocol
                 responderIdentifier: ourIdentifier,
-                multisigAddress: updatedChannel!.multisigAddress,
+                multisigAddress: postSyncStateChannel.multisigAddress,
                 appIdentityHash: app.identityHash,
                 action: responderApp.latestAction,
                 stateTimeout: commitment.stateTimeout,
@@ -181,9 +197,12 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
               role: ProtocolRoles.responder,
             },
           ];
+          if (!!error) {
+            throw new Error(error);
+          }
 
           // update the app
-          updatedChannel!.setState(
+          postSyncStateChannel.setState(
             app,
             await app.computeStateTransition(responderApp!.latestAction, provider),
             commitment.stateTimeout,
@@ -203,7 +222,7 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
         yield [
           PERSIST_STATE_CHANNEL,
           PersistStateChannelType.SyncAppInstances,
-          updatedChannel!,
+          postSyncStateChannel,
           doubleSigned,
         ];
 
@@ -211,11 +230,10 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
         break;
       }
       case PersistStateChannelType.NoChange: {
-        log.debug(`No sync from counterparty needed, completing.`);
         // use yield syntax to properly return values from the protocol
         // to the controllers
-        yield [PERSIST_STATE_CHANNEL, PersistStateChannelType.NoChange, preProtocolStateChannel];
-        logTime(log, start, `[${processID}] Initiation finished`);
+        yield [PERSIST_STATE_CHANNEL, PersistStateChannelType.NoChange, postSyncStateChannel];
+        logTime(log, start, `[${processID}] No sync from responder needed`);
         break;
       }
       case PersistStateChannelType.CreateChannel: {
@@ -282,15 +300,29 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
     };
 
     const syncType = needsSyncFromCounterparty(preProtocolStateChannel, initiatorChannel);
+    log.info(`[${processID}] Syncing channel with type: ${syncType}`);
     substart = Date.now();
     switch (syncType) {
+      case PersistStateChannelType.SyncNumProposedApps: {
+        const proposalSync = await syncNumProposedApps(postSyncStateChannel, initiatorChannel);
+        if (proposalSync) {
+          yield [
+            PERSIST_STATE_CHANNEL,
+            PersistStateChannelType.SyncNumProposedApps,
+            proposalSync.updatedChannel,
+          ];
+          postSyncStateChannel = StateChannel.fromJson(proposalSync!.updatedChannel.toJson());
+        }
+        logTime(log, substart, `[${processID}] Synced proposals with initiator`);
+        break;
+      }
       case PersistStateChannelType.SyncProposal: {
         // sync and save all proposals
         const proposalSync = await syncUntrackedProposals(
           postSyncStateChannel,
           initiatorChannel,
           initiatorSetStateCommitments,
-          context,
+          initiatorConditionalCommitments,
           ourIdentifier,
         );
         yield [
@@ -317,6 +349,7 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
           PersistStateChannelType.SyncFreeBalance,
           freeBalanceSync!.updatedChannel,
           freeBalanceSync!.commitments,
+          freeBalanceSync!.appContext,
         ];
         postSyncStateChannel = StateChannel.fromJson(freeBalanceSync!.updatedChannel.toJson());
         logTime(log, substart, `[${processID}] Synced free balance with initiator`);
@@ -337,7 +370,7 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
           postSyncStateChannel = StateChannel.fromJson(updatedChannel.toJson());
         }
 
-        let doubleSigned: SetStateCommitment[] = [];
+        const doubleSigned: SetStateCommitment[] = [];
         // process single-signed commitments
         for (const commitment of commitments) {
           if (commitment.signatures.length === 2) {
@@ -349,7 +382,7 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
           const app = postSyncStateChannel.appInstances.get(commitment.appIdentityHash)!;
 
           // signature has been validated, add our signature
-          yield [
+          const error = yield [
             OP_VALIDATE,
             ProtocolNames.takeAction,
             {
@@ -365,6 +398,9 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
               role: ProtocolRoles.responder,
             },
           ];
+          if (!!error) {
+            throw new Error(error);
+          }
 
           // update the app
           postSyncStateChannel.setState(
@@ -391,15 +427,14 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
           doubleSigned,
         ];
 
-        logTime(log, substart, `[${processID}] Synced app states with responder`);
+        logTime(log, substart, `[${processID}] Synced app states with initiator`);
         break;
       }
       case PersistStateChannelType.NoChange: {
-        log.debug(`No sync from counterparty needed, completing.`);
         // use yield syntax to properly return values from the protocol
         // to the controllers
-        yield [PERSIST_STATE_CHANNEL, PersistStateChannelType.NoChange, preProtocolStateChannel];
-        logTime(log, start, `[${processID}] Initiation finished`);
+        yield [PERSIST_STATE_CHANNEL, PersistStateChannelType.NoChange, postSyncStateChannel];
+        logTime(log, substart, `[${processID}] No sync from initiator needed`);
         break;
       }
       case PersistStateChannelType.CreateChannel: {
@@ -410,7 +445,7 @@ export const SYNC_PROTOCOL: ProtocolExecutionFlow = {
         log.error(`Unreachable: ${c}`);
     }
 
-    logTime(log, substart, `[${processID}] Synced app states with responder`);
+    logTime(log, substart, `[${processID}] Synced channel with initator`);
 
     yield [IO_SEND, messageToSend, postSyncStateChannel];
     logTime(log, start, `[${processID}] Response finished`);
@@ -424,7 +459,7 @@ async function syncAppStates(
   publicIdentifier: string,
 ) {
   let updatedChannel: StateChannel | undefined = undefined;
-  let commitments: SetStateCommitment[] = [];
+  const commitments: SetStateCommitment[] = [];
 
   for (const ourApp of [...ourChannel.appInstances.values()]) {
     const counterpartyApp = counterpartyChannel.appInstances.get(ourApp.identityHash);
@@ -531,20 +566,25 @@ async function syncFreeBalanceState(
 
   const freeBalance = FreeBalanceClass.fromAppInstance(counterpartyFreeBalance);
 
-  // check to see if the free balance update came from an app intall
+  // check to see if the free balance update came from an app install
   // or an app uninstall by looking at the active apps
-  const activeAppIds = Object.keys(freeBalance.toFreeBalanceState().activeAppsMap);
-  const uninstalledApp = [...ourChannel.appInstances.values()].find((app) => {
-    return !activeAppIds.includes(app.identityHash);
+  const activeAppIds = Object.keys(
+    FreeBalanceClass.fromAppInstance(ourChannel.freeBalance).toFreeBalanceState().activeAppsMap,
+  );
+
+  const uninstalledAppId = activeAppIds.find((appId) => {
+    return !counterpartyChannel.appInstances.has(appId);
   });
-  const installedProposal = [...ourChannel.proposedAppInstances.values()].find((proposal) =>
-    activeAppIds.includes(proposal.identityHash),
+
+  const installedProposal = [...counterpartyChannel.appInstances.values()].find(
+    (appInstance) => !ourChannel.appInstances.has(appInstance.identityHash),
   );
 
   let updatedChannel: StateChannel;
   let setStateCommitment: SetStateCommitment;
   let conditionalCommitment: ConditionalTransactionCommitment | undefined = undefined;
-  if (installedProposal && !uninstalledApp) {
+  let uninstalledApp: AppInstance | undefined = undefined;
+  if (installedProposal && !uninstalledAppId) {
     // set state commitment needed by store is the free balance
     // commitment
     setStateCommitment = SetStateCommitment.fromJson(freeBalanceSetState.toJson());
@@ -560,58 +600,23 @@ async function syncFreeBalanceState(
     conditionalCommitment = ConditionalTransactionCommitment.fromJson(conditionalJson);
     await assertSignerPresent(signer, conditionalCommitment);
     // add app to channel
-    const {
-      multiAssetMultiPartyCoinTransferInterpreterParams,
-      twoPartyOutcomeInterpreterParams,
-      singleAssetTwoPartyCoinTransferInterpreterParams,
-    } = computeInterpreterParameters(
-      installedProposal.outcomeType,
-      installedProposal.initiatorDepositAssetId,
-      installedProposal.responderDepositAssetId,
-      toBN(installedProposal.initiatorDeposit),
-      toBN(installedProposal.responderDeposit),
-      getSignerAddressFromPublicIdentifier(installedProposal.initiatorIdentifier),
-      getSignerAddressFromPublicIdentifier(installedProposal.responderIdentifier),
-      false,
-    );
-    const appInstance = new AppInstance(
-      /* initiator */ installedProposal.initiatorIdentifier,
-      /* responder */ installedProposal.responderIdentifier,
-      /* defaultTimeout */ installedProposal.defaultTimeout,
-      /* appInterface */ {
-        addr: installedProposal.appDefinition,
-        stateEncoding: installedProposal.abiEncodings.stateEncoding,
-        actionEncoding: installedProposal.abiEncodings.actionEncoding,
-      },
-      /* appSeqNo */ installedProposal.appSeqNo,
-      /* latestState */ installedProposal.initialState,
-      /* latestVersionNumber */ 1,
-      /* stateTimeout */ installedProposal.stateTimeout,
-      /* outcomeType */ installedProposal.outcomeType,
-      /* multisig */ ourChannel.multisigAddress,
-      installedProposal.meta,
-      /* latestAction */ undefined,
-      twoPartyOutcomeInterpreterParams,
-      multiAssetMultiPartyCoinTransferInterpreterParams,
-      singleAssetTwoPartyCoinTransferInterpreterParams,
-    );
+    const appInstance = installedProposal;
     updatedChannel = ourChannel
       .removeProposal(appInstance.identityHash)
       .addAppInstance(appInstance)
       .setFreeBalance(freeBalance);
-  } else if (uninstalledApp && !installedProposal) {
-    // set state commitment needed here is for the app
-    // counterparty may not have this since it is uninstalled,
-    // so find from our records
-    const json = ourSetState.find(
+  } else if (uninstalledAppId && !installedProposal) {
+    // set state commitment needed here is for the free balance
+    // application
+    const json = counterpartySetState.find(
       (c) =>
-        c.appIdentityHash === uninstalledApp.identityHash &&
-        toBN(c.versionNumber).eq(uninstalledApp.versionNumber),
+        c.appIdentityHash === ourChannel.freeBalance.identityHash &&
+        toBN(c.versionNumber).eq(counterpartyFreeBalance.latestVersionNumber),
     );
     if (!json) {
       throw new Error(
         `Failed to find final set state commitment for app in counterparty's commitments, aborting. App: ${stringify(
-          uninstalledApp,
+          uninstalledAppId,
         )}, counterparty commitments: ${stringify(counterpartySetState)}`,
       );
     }
@@ -620,21 +625,34 @@ async function syncFreeBalanceState(
       getSignerAddressFromPublicIdentifier(publicIdentifier),
       setStateCommitment,
     );
-    updatedChannel = ourChannel
-      .removeAppInstance(uninstalledApp.identityHash)
-      .setFreeBalance(freeBalance);
+    uninstalledApp = ourChannel.getAppInstance(uninstalledAppId);
+    updatedChannel = ourChannel.removeAppInstance(uninstalledAppId).setFreeBalance(freeBalance);
   } else {
     throw new Error(
-      `Free balance has higher nonce, but cannot find an app that has been uninstalled or installed, or found both an installed and uninstalled app. Our channel: ${stringify(
+      `Free balance has higher nonce, but cannot find an app that has been uninstalled or installed, or found both an installed and uninstalled app. installed: ${installedProposal} uninstalled: ${uninstalledAppId} Our channel: ${stringify(
         ourChannel.toJson(),
-      )}, free balance: ${stringify(freeBalance.toFreeBalanceState())}`,
+      )}, counterparty: ${stringify(counterpartyChannel.toJson())}`,
     );
   }
 
   return {
     updatedChannel,
     commitments: [setStateCommitment, conditionalCommitment].filter((x) => !!x),
+    appContext: uninstalledApp,
   };
+}
+
+async function syncNumProposedApps(ourChannel: StateChannel, counterpartyChannel: StateChannel) {
+  // handle case where we have to add a proposal to our store
+  if (ourChannel.numProposedApps >= counterpartyChannel.numProposedApps) {
+    // our proposals are ahead, counterparty should sync if needed
+    return undefined;
+  }
+  if (ourChannel.numProposedApps !== counterpartyChannel.numProposedApps - 1) {
+    throw new Error(`Cannot sync by more than one proposed app, use restore instead.`);
+  }
+
+  return { updatedChannel: ourChannel.incrementNumProposedApps() };
 }
 
 // adds a missing proposal from the responder channel to our channel. Is only
@@ -644,7 +662,7 @@ async function syncUntrackedProposals(
   ourChannel: StateChannel,
   counterpartyChannel: StateChannel,
   setStateCommitments: SetStateCommitmentJSON[],
-  context: Context,
+  conditionalCommitments: ConditionalTransactionCommitmentJSON[],
   publicIdentifier: string,
 ) {
   // handle case where we have to add a proposal to our store
@@ -660,51 +678,32 @@ async function syncUntrackedProposals(
     (app) => !ourChannel.proposedAppInstances.has(app.identityHash),
   );
   if (!untrackedProposedApp) {
-    throw new Error(`Cannot find matching untracked proposal in counterparty's store, aborting`);
+    throw new Error(`Could not find proposal to sync`);
   }
   const correspondingSetStateCommitment = setStateCommitments.find(
     (p) => p.appIdentityHash === untrackedProposedApp.identityHash,
   );
-  if (!correspondingSetStateCommitment) {
+  const correspondingConditionalCommitment = conditionalCommitments.find(
+    (p) => p.appIdentityHash === untrackedProposedApp.identityHash,
+  );
+  if (!correspondingSetStateCommitment || !correspondingConditionalCommitment) {
     throw new Error(
-      `No corresponding set state commitment for ${untrackedProposedApp.identityHash}, aborting`,
+      `No corresponding commitments for ${untrackedProposedApp.identityHash}, aborting`,
     );
   }
 
   // generate the commitment and verify signatures
-  const proposedAppInstance = {
-    identity: {
-      appDefinition: untrackedProposedApp.appDefinition,
-      channelNonce: toBN(counterpartyChannel.numProposedApps),
-      participants: counterpartyChannel.getSigningKeysFor(
-        untrackedProposedApp.initiatorIdentifier,
-        untrackedProposedApp.responderIdentifier,
-      ),
-      multisigAddress: ourChannel.multisigAddress,
-      defaultTimeout: toBN(untrackedProposedApp.defaultTimeout),
-    },
-    hashOfLatestState: keccak256(
-      defaultAbiCoder.encode(
-        [untrackedProposedApp.abiEncodings.stateEncoding],
-        [untrackedProposedApp.initialState],
-      ),
-    ),
-    versionNumber: 1,
-    stateTimeout: untrackedProposedApp.stateTimeout,
-  };
-  const generatedCommitment = getSetStateCommitment(context, proposedAppInstance as AppInstance);
-  await generatedCommitment.addSignatures(
-    correspondingSetStateCommitment.signatures[0],
-    correspondingSetStateCommitment.signatures[1],
+  const setStateCommitment = SetStateCommitment.fromJson(correspondingSetStateCommitment);
+  const conditionalCommitment = ConditionalTransactionCommitment.fromJson(
+    correspondingConditionalCommitment,
   );
-  await assertSignerPresent(
-    getSignerAddressFromPublicIdentifier(publicIdentifier),
-    generatedCommitment,
-  );
+  const counterpartyAddr = getSignerAddressFromPublicIdentifier(publicIdentifier);
+  await assertSignerPresent(counterpartyAddr, setStateCommitment);
+  await assertSignerPresent(counterpartyAddr, conditionalCommitment);
   const updatedChannel = ourChannel.addProposal(untrackedProposedApp);
   return {
     updatedChannel,
-    commitments: [generatedCommitment],
+    commitments: [setStateCommitment, conditionalCommitment],
   };
 }
 
@@ -738,9 +737,8 @@ async function assertSignerPresent(
   signer: string,
   commitment: SetStateCommitment | ConditionalTransactionCommitment,
 ) {
-  const signatures = [...commitment.signatures];
   const signers = await Promise.all(
-    signatures.map(
+    commitment.signatures.map(
       async (sig) => sig && (await recoverAddressFromChannelMessage(commitment.hashToSign(), sig)),
     ),
   );
@@ -763,6 +761,10 @@ function needsSyncFromCounterparty(
   // check channel nonces
   // covers interruptions in: propose
   if (ourChannel.numProposedApps < counterpartyChannel.numProposedApps) {
+    if (ourChannel.proposedAppInstances.size === counterpartyChannel.proposedAppInstances.size) {
+      // their proposal was rejected
+      return PersistStateChannelType.SyncNumProposedApps;
+    }
     return PersistStateChannelType.SyncProposal;
   }
 

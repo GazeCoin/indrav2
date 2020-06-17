@@ -1,9 +1,8 @@
 import {
-  MethodParams,
   DepositAppState,
-  UninstallMiddlewareContext,
-  ProtocolRoles,
   CONVENTION_FOR_ETH_ASSET_ID,
+  ProtocolParams,
+  StateChannelJSON,
 } from "@connext/types";
 import {
   getAddressFromAssetId,
@@ -11,20 +10,19 @@ import {
   stringify,
 } from "@connext/utils";
 import { MinimumViableMultisig, ERC20 } from "@connext/contracts";
+import { Contract, providers, constants } from "ethers";
 
 import { baseCoinTransferValidation } from "../shared";
-import { Zero } from "ethers/constants";
-import { Contract } from "ethers";
-import { BaseProvider, JsonRpcProvider } from "ethers/providers";
+
+const { Zero } = constants;
 
 export const validateDepositApp = async (
-  params: MethodParams.ProposeInstall,
-  initiatorIdentifier: string,
-  responderIdentifier: string,
-  multisigAddress: string,
-  provider: BaseProvider,
+  params: ProtocolParams.Propose,
+  channel: StateChannelJSON,
+  provider: providers.JsonRpcProvider,
 ) => {
-  const { responderDeposit, initiatorDeposit } = params;
+  const { responderDeposit, initiatorDeposit, initiatorIdentifier, responderIdentifier } = params;
+  const { multisigAddress } = channel;
   const initialState = params.initialState as DepositAppState;
 
   const initiatorSignerAddress = getSignerAddressFromPublicIdentifier(initiatorIdentifier);
@@ -80,18 +78,14 @@ export const validateDepositApp = async (
   const startingMultisigBalance =
     initialState.assetId === CONVENTION_FOR_ETH_ASSET_ID
       ? await provider.getBalance(multisigAddress)
-      : await new Contract(initialState.assetId, ERC20.abi as any, provider).functions.balanceOf(
-          multisigAddress,
-        );
+      : await new Contract(initialState.assetId, ERC20.abi, provider).balanceOf(multisigAddress);
 
-  const multisig = new Contract(multisigAddress, MinimumViableMultisig.abi as any, provider);
+  const multisig = new Contract(multisigAddress, MinimumViableMultisig.abi, provider);
   let startingTotalAmountWithdrawn;
   try {
-    startingTotalAmountWithdrawn = await multisig.functions.totalAmountWithdrawn(
-      initialState.assetId,
-    );
+    startingTotalAmountWithdrawn = await multisig.totalAmountWithdrawn(initialState.assetId);
   } catch (e) {
-    const NOT_DEPLOYED_ERR = `contract not deployed (contractAddress="${multisigAddress}"`;
+    const NOT_DEPLOYED_ERR = `CALL_EXCEPTION`;
     if (!e.message.includes(NOT_DEPLOYED_ERR)) {
       throw new Error(e);
     }
@@ -111,34 +105,4 @@ export const validateDepositApp = async (
       `Cannot install deposit app with invalid startingMultisigBalance. Expected ${startingMultisigBalance}, got ${initialState.startingMultisigBalance}`,
     );
   }
-};
-
-export const uninstallDepositMiddleware = async (
-  context: UninstallMiddlewareContext,
-  provider: JsonRpcProvider,
-) => {
-  const { role, appInstance, stateChannel, params } = context;
-
-  const latestState = appInstance.latestState as DepositAppState;
-  const currentMultisigBalance =
-    latestState.assetId === CONVENTION_FOR_ETH_ASSET_ID
-      ? await provider.getBalance(stateChannel.multisigAddress)
-      : await new Contract(latestState.assetId, ERC20.abi as any, provider).functions.balanceOf(
-          stateChannel.multisigAddress,
-        );
-
-  if (currentMultisigBalance.lt(latestState.startingMultisigBalance)) {
-    throw new Error(
-      `Refusing to uninstall, current multisig balance (${currentMultisigBalance.toString()}) is less than starting multsig balance (${latestState.startingMultisigBalance.toString()})`,
-    );
-  }
-
-  if (
-    role === ProtocolRoles.initiator &&
-    latestState.transfers[0].to !== getSignerAddressFromPublicIdentifier(params.initiatorIdentifier)
-  ) {
-    throw new Error(`Cannot uninstall deposit app without being the initiator`);
-  }
-
-  // TODO: withdrawal amount validation?
 };

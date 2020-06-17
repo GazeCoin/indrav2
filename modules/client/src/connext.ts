@@ -1,24 +1,23 @@
-import { SupportedApplications } from "@connext/apps";
+import { ERC20 } from "@connext/contracts";
 import {
   Address,
   AppAction,
   AppInstanceJson,
-  AppInstanceProposal,
   AppRegistry,
-  AppState,
   AssetId,
   ChannelMethods,
   ChannelProviderConfig,
   ConditionalTransferTypes,
+  CONVENTION_FOR_ETH_ASSET_ID,
   DefaultApp,
   DepositAppName,
   DepositAppState,
-  EventNames,
   IChannelProvider,
   IChannelSigner,
-  IClientStore,
+  IStoreService,
   IConnextClient,
   ILoggerService,
+  IMessagingService,
   INodeApiClient,
   MethodNames,
   MethodParams,
@@ -30,37 +29,34 @@ import {
   RebalanceProfile,
   SimpleLinkedTransferAppName,
   SimpleTwoPartySwapAppName,
-  WithdrawAppName,
-  CONVENTION_FOR_ETH_ASSET_ID,
-  IMessagingService,
   WithdrawalMonitorObject,
+  WithdrawAppName,
+  EventName,
+  EventPayload,
+  SupportedApplicationNames,
 } from "@connext/types";
 import {
+  delay,
   getRandomBytes32,
   getAddressFromAssetId,
   getSignerAddressFromPublicIdentifier,
   stringify,
 } from "@connext/utils";
-import { Contract, providers } from "ethers";
-import { AddressZero } from "ethers/constants";
-import { TransactionResponse } from "ethers/providers";
-import { BigNumber, bigNumberify, Network, Transaction } from "ethers/utils";
-import tokenAbi from "human-standard-token-abi";
+import { BigNumber, Contract, providers, constants, utils } from "ethers";
 
 import {
   DepositController,
-  HashLockTransferController,
-  LinkedTransferController,
-  ResolveHashLockTransferController,
-  ResolveLinkedTransferController,
-  ResolveSignedTransferController,
-  SignedTransferController,
   SwapController,
   WithdrawalController,
+  CreateTransferController,
+  ResolveTransferController,
 } from "./controllers";
 import { ConnextListener } from "./listener";
 import { InternalClientOptions } from "./types";
 import { NodeApiClient } from "./node";
+
+const { AddressZero } = constants;
+const { soliditySha256 } = utils;
 
 export class ConnextClient implements IConnextClient {
   public appRegistry: AppRegistry;
@@ -71,25 +67,21 @@ export class ConnextClient implements IConnextClient {
   public log: ILoggerService;
   public messaging: IMessagingService;
   public multisigAddress: Address;
-  public network: Network;
+  public network: providers.Network;
   public node: INodeApiClient;
   public nodeIdentifier: string;
   public nodeSignerAddress: string;
   public publicIdentifier: string;
   public signer: IChannelSigner;
   public signerAddress: string;
-  public store: IClientStore;
+  public store: IStoreService;
   public token: Contract;
 
   private opts: InternalClientOptions;
 
   private depositController: DepositController;
-  private hashlockTransferController: HashLockTransferController;
-  private linkedTransferController: LinkedTransferController;
-  private resolveHashLockTransferController: ResolveHashLockTransferController;
-  private resolveLinkedTransferController: ResolveLinkedTransferController;
-  private resolveSignedTransferController: ResolveSignedTransferController;
-  private signedTransferController: SignedTransferController;
+  private createTransferController: CreateTransferController;
+  private resolveTransferController: ResolveTransferController;
   private swapController: SwapController;
   private withdrawalController: WithdrawalController;
 
@@ -120,22 +112,9 @@ export class ConnextClient implements IConnextClient {
     this.depositController = new DepositController("DepositController", this);
     this.swapController = new SwapController("SwapController", this);
     this.withdrawalController = new WithdrawalController("WithdrawalController", this);
-    this.linkedTransferController = new LinkedTransferController("LinkedTransferController", this);
-    this.resolveLinkedTransferController = new ResolveLinkedTransferController(
-      "ResolveLinkedTransferController",
-      this,
-    );
-    this.hashlockTransferController = new HashLockTransferController(
-      "HashLockTransferController",
-      this,
-    );
-    this.resolveHashLockTransferController = new ResolveHashLockTransferController(
-      "ResolveHashLockTransferController",
-      this,
-    );
-    this.signedTransferController = new SignedTransferController("SignedTransferController", this);
-    this.resolveSignedTransferController = new ResolveSignedTransferController(
-      "ResolveSignedTransferController",
+    this.createTransferController = new CreateTransferController("CreateTransferController", this);
+    this.resolveTransferController = new ResolveTransferController(
+      "ResolveTransferController",
       this,
     );
   }
@@ -153,7 +132,7 @@ export class ConnextClient implements IConnextClient {
           return chan && chan.available;
         };
         while (!(await channelIsAvailable())) {
-          await new Promise((res: any): any => setTimeout((): void => res(), 100));
+          await delay(100);
         }
         resolve();
       },
@@ -229,7 +208,7 @@ export class ConnextClient implements IConnextClient {
   public getAppRegistry = async (
     appDetails?:
       | {
-          name: SupportedApplications;
+          name: SupportedApplicationNames;
           chainId: number;
         }
       | { appDefinitionAddress: string },
@@ -312,8 +291,8 @@ export class ConnextClient implements IConnextClient {
    */
   public transfer = async (
     params: PublicParams.Transfer,
-  ): Promise<PublicResults.LinkedTransfer> => {
-    return this.linkedTransferController.linkedTransfer({
+  ): Promise<PublicResults.ConditionalTransfer> => {
+    return this.createTransferController.createTransfer({
       amount: params.amount,
       assetId: params.assetId || CONVENTION_FOR_ETH_ASSET_ID,
       conditionType: ConditionalTransferTypes.LinkedTransfer,
@@ -321,7 +300,7 @@ export class ConnextClient implements IConnextClient {
       paymentId: params.paymentId || getRandomBytes32(),
       preImage: getRandomBytes32(),
       recipient: params.recipient,
-    }) as Promise<PublicResults.LinkedTransfer>;
+    }) as Promise<PublicResults.ConditionalTransfer>;
   };
 
   public withdraw = (params: PublicParams.Withdraw): Promise<PublicResults.Withdraw> => {
@@ -342,37 +321,20 @@ export class ConnextClient implements IConnextClient {
   public resolveCondition = async (
     params: PublicParams.ResolveCondition,
   ): Promise<PublicResults.ResolveCondition> => {
-    switch (params.conditionType) {
-      case ConditionalTransferTypes.LinkedTransfer: {
-        return this.resolveLinkedTransferController.resolveLinkedTransfer(params);
-      }
-      case ConditionalTransferTypes.HashLockTransfer: {
-        return this.resolveHashLockTransferController.resolveHashLockTransfer(params);
-      }
-      case ConditionalTransferTypes.SignedTransfer: {
-        return this.resolveSignedTransferController.resolveSignedTransfer(params);
-      }
-      default:
-        throw new Error(`Condition type ${(params as any).conditionType} invalid`);
+    // paymentId is generated for hashlock transfer
+    if (params.conditionType === ConditionalTransferTypes.HashLockTransfer) {
+      const lockHash = soliditySha256(["bytes32"], [params.preImage]);
+      const paymentId = soliditySha256(["address", "bytes32"], [params.assetId, lockHash]);
+      params.paymentId = paymentId;
     }
+    return this.resolveTransferController.resolveTransfer(params);
   };
 
   public conditionalTransfer = async (
     params: PublicParams.ConditionalTransfer,
   ): Promise<PublicResults.ConditionalTransfer> => {
-    switch (params.conditionType) {
-      case ConditionalTransferTypes.LinkedTransfer: {
-        return this.linkedTransferController.linkedTransfer(params);
-      }
-      case ConditionalTransferTypes.HashLockTransfer: {
-        return this.hashlockTransferController.hashLockTransfer(params);
-      }
-      case ConditionalTransferTypes.SignedTransfer: {
-        return this.signedTransferController.signedTransfer(params);
-      }
-      default:
-        throw new Error(`Condition type ${(params as any).conditionType} invalid`);
-    }
+    params.assetId = params.assetId || CONVENTION_FOR_ETH_ASSET_ID;
+    return this.createTransferController.createTransfer(params);
   };
 
   public getHashLockTransfer = async (
@@ -401,11 +363,11 @@ export class ConnextClient implements IConnextClient {
   // this function should be called when the user knows a withdrawal should
   // be submitted. if there is no withdrawal expected, this promise will last
   // for the duration of the timeout
-  public watchForUserWithdrawal = async (): Promise<TransactionResponse[]> => {
+  public watchForUserWithdrawal = async (): Promise<providers.TransactionResponse[]> => {
     // poll for withdrawal tx submitted to multisig matching tx data
     const maxBlocks = 15;
     const startingBlock = await this.ethProvider.getBlockNumber();
-    const transactions: TransactionResponse[] = [];
+    const transactions: providers.TransactionResponse[] = [];
 
     try {
       await new Promise((resolve: any, reject: any): any => {
@@ -458,16 +420,12 @@ export class ConnextClient implements IConnextClient {
       await this.channelProvider.send(ChannelMethods.chan_restoreState, {});
       this.log.info(`Found state to restore from store's backup`);
     } catch (e) {
-      const {
-        channel,
-        setupCommitment,
-        setStateCommitments,
-        conditionalCommitments,
-      } = await this.node.restoreState(this.publicIdentifier);
+      const toRestore = await this.node.restoreState(this.publicIdentifier);
+      const { channel, setupCommitment, setStateCommitments, conditionalCommitments } = toRestore;
       if (!channel) {
         throw new Error(`No matching states found by node for ${this.publicIdentifier}`);
       }
-      this.log.info(`Found state to restore from node: ${stringify(channel)}`);
+      this.log.info(`Found state to restore from node: ${stringify(toRestore)}`);
       await this.channelProvider.send(ChannelMethods.chan_setStateChannel, {
         state: channel,
         setupCommitment,
@@ -482,23 +440,44 @@ export class ConnextClient implements IConnextClient {
   ///////////////////////////////////
   // EVENT METHODS
 
-  public on = (event: EventNames, callback: (...args: any[]) => void): ConnextListener => {
-    return this.listener.on(event, callback);
+  public on = <T extends EventName>(
+    event: T,
+    callback: (payload: EventPayload[T]) => void | Promise<void>,
+    filter?: (payload: EventPayload[T]) => boolean,
+  ) => {
+    this.listener.attach(event, callback, filter);
   };
 
-  public once = (event: EventNames, callback: (...args: any[]) => void): ConnextListener => {
-    return this.listener.once(event, callback);
+  public once = <T extends EventName>(
+    event: T,
+    callback: (payload: EventPayload[T]) => void | Promise<void>,
+    filter?: (payload: EventPayload[T]) => boolean,
+  ) => {
+    this.listener.attachOnce(event, callback, filter);
   };
 
-  public emit = (event: EventNames, data: any): boolean => {
-    return this.listener.emit(event, data);
+  public waitFor<T extends EventName>(
+    event: T,
+    timeout: number,
+    filter?: (payload: EventPayload[T]) => boolean,
+  ): Promise<EventPayload[T]> {
+    return this.listener.waitFor(event, timeout, filter);
+  }
+
+  // TODO: allow for removing listeners attached via a specific event
+  // by manipulating the context of the events
+
+  public off = () => {
+    this.listener.detach();
   };
 
-  public removeListener = (
-    event: EventNames,
-    callback: (...args: any[]) => void,
-  ): ConnextListener => {
-    return this.listener.removeListener(event, callback);
+  public emit = <T extends EventName>(event: T, payload: EventPayload[T]): boolean => {
+    try {
+      this.listener.post(event, payload);
+      return true;
+    } catch (e) {
+      return false;
+    }
   };
 
   ///////////////////////////////////
@@ -543,8 +522,8 @@ export class ConnextClient implements IConnextClient {
         // but need the nodes free balance
         // address in the multisig
         const obj = {};
-        obj[this.nodeSignerAddress] = new BigNumber(0);
-        obj[this.signerAddress] = new BigNumber(0);
+        obj[this.nodeSignerAddress] = BigNumber.from(0);
+        obj[this.signerAddress] = BigNumber.from(0);
         return obj;
       }
       throw e;
@@ -601,16 +580,17 @@ export class ConnextClient implements IConnextClient {
       action,
       appIdentityHash,
       stateTimeout,
+      multisigAddress: this.multisigAddress,
     } as MethodParams.TakeAction);
   };
 
   public proposeInstallApp = async (
     params: MethodParams.ProposeInstall,
   ): Promise<MethodResults.ProposeInstall> => {
-    return this.channelProvider.send(
-      MethodNames.chan_proposeInstall,
-      params as MethodParams.ProposeInstall,
-    );
+    return this.channelProvider.send(MethodNames.chan_proposeInstall, {
+      ...(params as MethodParams.ProposeInstall),
+      multisigAddress: this.multisigAddress,
+    });
   };
 
   public installApp = async (appIdentityHash: string): Promise<MethodResults.Install> => {
@@ -621,10 +601,14 @@ export class ConnextClient implements IConnextClient {
     }
     return this.channelProvider.send(MethodNames.chan_install, {
       appIdentityHash,
+      multisigAddress: this.multisigAddress,
     } as MethodParams.Install);
   };
 
-  public uninstallApp = async (appIdentityHash: string): Promise<MethodResults.Uninstall> => {
+  public uninstallApp = async (
+    appIdentityHash: string,
+    action?: AppAction,
+  ): Promise<MethodResults.Uninstall> => {
     // check the app is actually installed
     const err = await this.appNotInstalled(appIdentityHash);
     if (err) {
@@ -633,13 +617,20 @@ export class ConnextClient implements IConnextClient {
     }
     return this.channelProvider.send(MethodNames.chan_uninstall, {
       appIdentityHash,
+      multisigAddress: this.multisigAddress,
+      action,
     } as MethodParams.Uninstall);
   };
 
-  public rejectInstallApp = async (appIdentityHash: string): Promise<MethodResults.Uninstall> => {
+  public rejectInstallApp = async (
+    appIdentityHash: string,
+    reason?: string,
+  ): Promise<MethodResults.Uninstall> => {
     return this.channelProvider.send(MethodNames.chan_rejectInstall, {
       appIdentityHash,
-    });
+      multisigAddress: this.multisigAddress,
+      reason,
+    } as MethodParams.RejectInstall);
   };
 
   ///////////////////////////////////
@@ -650,11 +641,14 @@ export class ConnextClient implements IConnextClient {
   };
 
   public reclaimPendingAsyncTransfers = async (): Promise<void> => {
-    const pendingTransfers = await this.node.getPendingAsyncTransfers();
-    this.log.debug(`Found ${pendingTransfers.length} transfers to reclaim`);
-    for (const transfer of pendingTransfers) {
-      const { encryptedPreImage, paymentId } = transfer;
-      await this.reclaimPendingAsyncTransfer(paymentId, encryptedPreImage);
+    try {
+      this.log.info(`Attempting to install pending transfers`);
+      const installedTransfers = await this.node.installPendingTransfers();
+      this.log.info(
+        `Installed ${installedTransfers.length} transfers, should unlock automatically`,
+      );
+    } catch (e) {
+      this.log.error(`Error installing pending transfers: ${e.message}`);
     }
   };
 
@@ -663,32 +657,37 @@ export class ConnextClient implements IConnextClient {
     paymentId: string,
     encryptedPreImage: string,
   ): Promise<PublicResults.ResolveLinkedTransfer> => {
-    this.log.debug(`Reclaiming transfer ${paymentId}`);
+    this.log.info(`Unlocking transfer ${paymentId}`);
     // decrypt secret and resolve
     const preImage = await this.channelProvider.send(ChannelMethods.chan_decrypt, {
       encryptedPreImage,
     });
     this.log.debug(`Decrypted message and recovered preImage: ${preImage}`);
-    const response = await this.resolveLinkedTransferController.resolveLinkedTransfer({
-      conditionType: ConditionalTransferTypes.LinkedTransfer,
-      paymentId,
-      preImage,
-    });
-    this.log.debug(`Reclaimed transfer ${paymentId}`);
-    return response;
+    try {
+      const response = await this.resolveTransferController.resolveTransfer({
+        conditionType: ConditionalTransferTypes.LinkedTransfer,
+        paymentId,
+        preImage,
+      });
+      this.log.info(`Unlocked transfer ${paymentId} using preImage: ${preImage}`);
+      return response;
+    } catch (e) {
+      this.log.error(`Error in reclaimPendingAsyncTransfer: ${e.message}`);
+      throw e;
+    }
   };
 
   ///////////////////////////////////
   // LOW LEVEL METHODS
 
   public matchTx = (
-    givenTransaction: Transaction | undefined,
+    givenTransaction: providers.TransactionRequest | undefined,
     expected: MinimalTransaction,
   ): boolean => {
     return (
       givenTransaction &&
       givenTransaction.to === expected.to &&
-      bigNumberify(givenTransaction.value).eq(expected.value) &&
+      BigNumber.from(givenTransaction.value).eq(expected.value) &&
       givenTransaction.data === expected.data
     );
   };
@@ -748,13 +747,13 @@ export class ConnextClient implements IConnextClient {
     const { appInstances: proposed } = await this.getProposedAppInstances();
 
     // deal with any proposed swap or linked transfer apps
-    const hangingProposals = proposed.filter((proposal: AppInstanceProposal) =>
+    const hangingProposals = proposed.filter((proposal: AppInstanceJson) =>
       appDefinitions.includes(proposal.appDefinition),
     );
     // remove from `proposedAppInstances`
     for (const hanging of hangingProposals) {
       try {
-        await this.rejectInstallApp(hanging.identityHash);
+        await this.rejectInstallApp(hanging.identityHash, `Removing hanging proposals`);
       } catch (e) {
         this.log.error(
           `Could not remove proposal: ${hanging.identityHash}. Error: ${e.stack || e.message}`,
@@ -768,7 +767,7 @@ export class ConnextClient implements IConnextClient {
    */
   private uninstallAllAppsByDefintion = async (appDefinitions: string[]): Promise<void> => {
     const apps = (await this.getAppInstances()).filter((app: AppInstanceJson) =>
-      appDefinitions.includes(app.appInterface.addr),
+      appDefinitions.includes(app.appDefinition),
     );
     // TODO: ARJUN there is an edgecase where this will cancel withdrawal
     for (const app of apps) {
@@ -800,7 +799,7 @@ export class ConnextClient implements IConnextClient {
       const currentMultisigBalance =
         assetId === AddressZero
           ? await this.ethProvider.getBalance(this.multisigAddress)
-          : await new Contract(assetId, tokenAbi, this.ethProvider).functions.balanceOf(
+          : await new Contract(assetId, ERC20.abi, this.ethProvider).balanceOf(
               this.multisigAddress,
             );
 
@@ -819,20 +818,26 @@ export class ConnextClient implements IConnextClient {
       // there is still an active deposit, setup a listener to
       // rescind deposit rights when deposit is sent to multisig
       if (assetId === AddressZero) {
-        this.ethProvider.on(this.multisigAddress, async (balance: BigNumber) => {
+        this.ethProvider.on("block", async () => {
+          const balance =
+            assetId === AddressZero
+              ? await this.ethProvider.getBalance(this.multisigAddress)
+              : await new Contract(assetId, ERC20.abi, this.ethProvider).balanceOf(
+                  this.multisigAddress,
+                );
           if (balance.gt((latestState as DepositAppState).startingMultisigBalance)) {
+            this.ethProvider.removeAllListeners("block");
             await this.rescindDepositRights({ assetId, appIdentityHash });
-            this.ethProvider.removeAllListeners(this.multisigAddress);
           }
         });
         continue;
       }
 
-      new Contract(assetId, tokenAbi, this.ethProvider).once(
+      new Contract(assetId, ERC20.abi, this.ethProvider).once(
         "Transfer",
         async (sender: string, recipient: string, amount: BigNumber) => {
           if (recipient === this.multisigAddress && amount.gt(0)) {
-            const bal = await new Contract(assetId, tokenAbi, this.ethProvider).functions.balanceOf(
+            const bal = await new Contract(assetId, ERC20.abi, this.ethProvider).balanceOf(
               this.multisigAddress,
             );
             if (bal.gt((latestState as DepositAppState).startingMultisigBalance)) {
@@ -880,7 +885,7 @@ export class ConnextClient implements IConnextClient {
 
   private checkForUserWithdrawals = async (
     inBlock: number,
-  ): Promise<[WithdrawalMonitorObject, TransactionResponse][]> => {
+  ): Promise<[WithdrawalMonitorObject, providers.TransactionResponse][]> => {
     const vals = await this.getUserWithdrawals();
     if (vals.length === 0) {
       this.log.error("No transaction found in store.");
@@ -889,7 +894,7 @@ export class ConnextClient implements IConnextClient {
 
     const getTransactionResponse = async (
       tx: MinimalTransaction,
-    ): Promise<TransactionResponse | undefined> => {
+    ): Promise<providers.TransactionResponse | undefined> => {
       // get the transaction hash that we should be looking for from
       // the contract method
       const txsTo = await this.ethProvider.getTransactionCount(tx.to, inBlock);
@@ -912,7 +917,7 @@ export class ConnextClient implements IConnextClient {
       return undefined;
     };
 
-    let responses = [];
+    const responses = [];
     for (const val of vals) {
       responses.push([val, await getTransactionResponse(val.tx)]);
     }

@@ -1,7 +1,6 @@
 import { EventNames, IConnextClient, LinkedTransferStatus, Address } from "@connext/types";
-import { ColorfulLogger, getRandomBytes32 } from "@connext/utils";
-import { BigNumber } from "ethers/utils";
-import { Client } from "ts-nats";
+import { ColorfulLogger, getRandomBytes32, stringify } from "@connext/utils";
+import { BigNumber } from "ethers";
 
 import { env } from "../env";
 import { expect } from "../";
@@ -14,7 +13,6 @@ export async function asyncTransferAsset(
   clientB: IConnextClient,
   transferAmount: BigNumber,
   assetId: Address,
-  nats: Client, // TODO: remove
 ): Promise<ExistingBalancesAsyncTransfer> {
   const SENDER_INPUT_META = { hello: "world" };
   const nodeSignerAddress = clientA.nodeSignerAddress;
@@ -32,6 +30,7 @@ export async function asyncTransferAsset(
     return Promise.all([
       new Promise((resolve, reject) => {
         clientB.on(EventNames.CONDITIONAL_TRANSFER_UNLOCKED_EVENT, (data) => {
+          log.debug(`Got recipient transfer unlocked event with ${stringify(data)}`);
           expect(data.paymentId).to.be.ok;
           if (data.paymentId === paymentId) {
             expect(data).to.deep.include({
@@ -44,6 +43,7 @@ export async function asyncTransferAsset(
           }
         });
         clientB.on(EventNames.CONDITIONAL_TRANSFER_FAILED_EVENT, (data) => {
+          log.debug(`Got recipient transfer failed event with ${stringify(data)}`);
           expect(data.paymentId).to.be.ok;
           expect(data.error).to.be.ok;
           if (data.paymentId === paymentId) {
@@ -53,16 +53,16 @@ export async function asyncTransferAsset(
       }),
       new Promise((resolve) => {
         clientA.on(EventNames.CONDITIONAL_TRANSFER_UNLOCKED_EVENT, (data) => {
+          log.debug(`Got sender transfer unlocked event with ${stringify(data)}`);
           if (data.paymentId === paymentId) {
             return resolve();
           }
-          // TODO: Sender/recipient are undefined here because https://github.com/ConnextProject/indra/issues/1054
         });
       }),
     ]);
   };
 
-  let start = Date.now();
+  const start = Date.now();
   log.info(`call client.transfer()`);
   const { appIdentityHash } = await clientA.transfer({
     amount: transferAmount.toString(),
@@ -71,7 +71,6 @@ export async function asyncTransferAsset(
     recipient: clientB.publicIdentifier,
     paymentId,
   });
-  console.log(`[${paymentId.substring(0, 7)}] sender appIdentityHash: ${appIdentityHash}`);
   log.info(`transfer() returned in ${Date.now() - start}ms`);
 
   await transferFinished();
@@ -112,7 +111,7 @@ export async function asyncTransferAsset(
     receiverIdentifier: clientB.publicIdentifier,
     senderIdentifier: clientA.publicIdentifier,
     status: LinkedTransferStatus.COMPLETED,
-    meta: { ...SENDER_INPUT_META, sender: clientA.publicIdentifier },
+    meta: { ...SENDER_INPUT_META, sender: clientA.publicIdentifier, paymentId },
   });
   expect(paymentA.encryptedPreImage).to.be.ok;
 

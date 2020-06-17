@@ -1,5 +1,5 @@
 import { IConnextClient } from "@connext/types";
-import { AddressZero, Zero } from "ethers/constants";
+import { constants } from "ethers";
 
 import {
   createClient,
@@ -9,6 +9,8 @@ import {
   getOnchainTransactionsForChannel,
 } from "../util";
 
+const { AddressZero, Zero } = constants;
+
 describe("Collateral", () => {
   let client: IConnextClient;
   let tokenAddress: string;
@@ -16,7 +18,7 @@ describe("Collateral", () => {
 
   beforeEach(async () => {
     client = await createClient();
-    tokenAddress = client.config.contractAddresses.Token;
+    tokenAddress = client.config.contractAddresses.Token!;
     nodeSignerAddress = client.nodeSignerAddress;
   });
 

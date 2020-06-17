@@ -1,7 +1,6 @@
 import { WITHDRAW_STATE_TIMEOUT } from "@connext/apps";
 import {
   AppInstanceJson,
-  BigNumber,
   CoinTransfer,
   MinimalTransaction,
   PublicParams,
@@ -9,11 +8,11 @@ import {
   WithdrawAppName,
   WithdrawAppState,
   TransactionReceipt,
+  SingleAssetTwoPartyCoinTransferInterpreterParamsJson,
 } from "@connext/types";
 import { getSignerAddressFromPublicIdentifier, stringify } from "@connext/utils";
 import { Injectable } from "@nestjs/common";
-import { HashZero, Zero, AddressZero } from "ethers/constants";
-import { bigNumberify, hexlify, randomBytes } from "ethers/utils";
+import { BigNumber, constants, utils } from "ethers";
 
 import { CFCoreService } from "../cfCore/cfCore.service";
 import { Channel } from "../channel/channel.entity";
@@ -26,6 +25,9 @@ import { OnchainTransactionService } from "../onchainTransactions/onchainTransac
 
 import { WithdrawRepository } from "./withdraw.repository";
 import { Withdraw } from "./withdraw.entity";
+
+const { HashZero, Zero, AddressZero } = constants;
+const { hexlify, randomBytes } = utils;
 
 @Injectable()
 export class WithdrawService {
@@ -65,7 +67,8 @@ export class WithdrawService {
     const generatedCommitment = await this.cfCoreService.createWithdrawCommitment(
       {
         amount: state.transfers[0].amount,
-        assetId: appInstance.singleAssetTwoPartyCoinTransferInterpreterParams.tokenAddress,
+        assetId: (appInstance.outcomeInterpreterParameters as SingleAssetTwoPartyCoinTransferInterpreterParamsJson)
+          .tokenAddress,
         recipient: state.transfers[0].to,
         nonce: state.nonce,
       } as PublicParams.Withdraw,
@@ -78,7 +81,7 @@ export class WithdrawService {
     const hash = generatedCommitment.hashToSign();
     const counterpartySignatureOnWithdrawCommitment = await signer.signMessage(hash);
 
-    await this.cfCoreService.takeAction(appInstance.identityHash, {
+    await this.cfCoreService.takeAction(appInstance.identityHash, appInstance.multisigAddress, {
       signature: counterpartySignatureOnWithdrawCommitment,
     } as WithdrawAppAction);
     state = (await this.cfCoreService.getAppInstance(appInstance.identityHash))
@@ -96,7 +99,7 @@ export class WithdrawService {
       counterpartySignatureOnWithdrawCommitment,
     );
 
-    await this.cfCoreService.uninstallApp(appInstance.identityHash);
+    await this.cfCoreService.uninstallApp(appInstance.identityHash, appInstance.multisigAddress);
 
     await generatedCommitment.addSignatures(
       counterpartySignatureOnWithdrawCommitment, // our sig
@@ -247,7 +250,7 @@ export class WithdrawService {
 
     await this.saveWithdrawal(
       appIdentityHash,
-      bigNumberify(amount),
+      BigNumber.from(amount),
       assetId,
       initialState.transfers[0].to,
       initialState.data,

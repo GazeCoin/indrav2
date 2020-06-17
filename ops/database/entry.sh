@@ -8,7 +8,7 @@ export CHAIN_ID=$CHAIN_ID
 # 60 sec/min * 30 min = 1800
 backup_frequency="1800"
 mkdir -p snapshots
-backup_file="snapshots/`ls snapshots | grep "$CHAIN_ID" | sort -r | head -n 1`"
+backup_file="snapshots/`ls snapshots | grep "^$CHAIN_ID-" | sort -r | head -n 1`"
 
 ########################################
 ## Helper functions
@@ -36,7 +36,7 @@ function unlock {
 # Set an exit trap so that the database will do one final backup before shutting down
 function cleanup {
   log "Database exiting, creating final snapshot"
-  bash backup.sh
+  bash backup.sh $CHAIN_ID
   log "Shutting the database down"
   kill "$db_pid"
   unlock smart
@@ -49,11 +49,15 @@ trap cleanup SIGTERM
 ## Execute
 
 log "Good morning"
+if [[ ! -f "/var/lib/postgresql/data/PG_VERSION" ]]
+then isFresh="true"
+else isFresh="false"
+fi
 
 # Start temp database & wait until it wakes up
 log "Starting temp database for initialization & backup recovery.."
 unlock fast
-/docker-entrypoint.sh postgres &
+docker-entrypoint.sh postgres &
 PID=$!
 while ! psql -U $POSTGRES_USER -d $POSTGRES_DB -c "select 1" > /dev/null 2>&1
 do log "Waiting for db to wake up.." && sleep 1
@@ -61,13 +65,13 @@ done
 log "Good morning, Postgres!"
 
 # Is this a fresh database? Should we restore data from a snapshot?
-if [[ ! -f "/var/lib/postgresql/data/PG_VERSION" && -f "$backup_file" ]]
+if [[ "$isFresh" == "true" && -f "$backup_file" ]]
 then 
   log "Fresh postgres db started w backup present, we'll restore: $backup_file"
   psql --username=$POSTGRES_USER $POSTGRES_DB < $backup_file
   log "Done restoring db snapshot"
 else
-  log "Not restoring: Database exists or no snapshots found or in test mode"
+  log "Not restoring: Database exists ($isFresh) or no snapshots found ($backup_file)"
 fi
 
 log "Stopping old database.."
@@ -91,6 +95,6 @@ done &
 
 # Start database to serve requests from clients
 log "===> Starting new database.."
-/docker-entrypoint.sh postgres &
+docker-entrypoint.sh postgres &
 db_pid=$!
 wait "$db_pid"

@@ -1,56 +1,55 @@
-import { IAsyncStorage, IClientStore } from "@connext/types";
+import { IStoreService } from "@connext/types";
+import { Sequelize } from "sequelize";
 
-import { ConnextStore } from "./connextStore";
-import { PisaClientBackupAPI } from "./pisaClient";
-import { StoreTypes } from "./types";
-import { WrappedAsyncStorage } from "./wrappers";
-import { Sequelize } from "sequelize/types";
-
-export const getAsyncStore = (
-  storage: IAsyncStorage,
-  backupService?: PisaClientBackupAPI,
-): IClientStore =>
-  new ConnextStore(
-    StoreTypes.AsyncStorage,
-    { storage: new WrappedAsyncStorage(storage) },
-  );
-
-export const getFileStore = (
-  directory: string,
-  backupService?: PisaClientBackupAPI,
-): IClientStore =>
-  new ConnextStore(StoreTypes.File, { backupService, fileDir: directory });
-
-export const getLocalStore = (backupService?: PisaClientBackupAPI): IClientStore =>
-  new ConnextStore(StoreTypes.LocalStorage, { backupService });
-
-export const getMemoryStore = (): IClientStore =>
-  new ConnextStore(StoreTypes.Memory);
-
-export const getPostgresStore = (
-  sequelize: Sequelize | string,
-  prefix?: string,
-  backupService?: PisaClientBackupAPI,
-): IClientStore =>
-  new ConnextStore(
-    StoreTypes.Postgres,
-    { sequelize, backupService, prefix },
-  );
+import { storeDefaults } from "./constants";
+import { StoreService } from "./store";
+import { IAsyncStorage, StoreOptions } from "./types";
+import { WrappedAsyncStorage, WrappedLocalStorage, WrappedSequelizeStorage } from "./wrappers";
 
 ////////////////////////////////////////
-// TODO: the following @connext/store interface is depreciated
-// remove the following exports during next breaking release
+// @connext/store exports
+// keep synced with indra/docs/reference/store
 
-export { StoreTypes } from "./types";
+export { IBackupService, IStoreService } from "@connext/types";
+export { IAsyncStorage } from "./types";
 
-export {
-  FileStorage,
-  KeyValueStorage,
-  WrappedAsyncStorage,
-  WrappedLocalStorage,
-  WrappedMemoryStorage,
-  WrappedSequelizeStorage as WrappedPostgresStorage,
-} from "./wrappers";
-export { ConnextStore } from "./connextStore";
-export { PisaClientBackupAPI } from "./pisaClient";
-export { storeDefaults, storeKeys, storePaths } from "./constants";
+export const getAsyncStore = (storage: IAsyncStorage, opts: StoreOptions = {}): IStoreService =>
+  new StoreService(new WrappedAsyncStorage(storage, opts.prefix), opts.backupService, opts.logger);
+
+export const getFileStore = (fileDir: string, opts: StoreOptions = {}): IStoreService =>
+  new StoreService(
+    new WrappedSequelizeStorage(
+      opts.sequelize || `sqlite:${fileDir}/${storeDefaults.SQLITE_STORE_NAME}`,
+      opts.prefix,
+    ),
+    opts.backupService,
+    opts.logger,
+  );
+
+export const getLocalStore = (opts: StoreOptions = {}): IStoreService =>
+  new StoreService(new WrappedLocalStorage(opts.prefix), opts.backupService, opts.logger);
+
+export const getMemoryStore = (opts: StoreOptions = {}): IStoreService =>
+  new StoreService(
+    new WrappedSequelizeStorage(
+      opts.sequelize || `sqlite:${storeDefaults.SQLITE_MEMORY_STORE_STRING}`,
+      opts.prefix,
+    ),
+    opts.backupService,
+    opts.logger,
+  );
+
+export const getPostgresStore = (
+  connection: Sequelize | string,
+  opts: StoreOptions = {},
+): IStoreService =>
+  new StoreService(
+    new WrappedSequelizeStorage(
+      connection,
+      opts.prefix,
+      opts.separator,
+      storeDefaults.DATABASE_TABLE_NAME,
+    ),
+    opts.backupService,
+    opts.logger,
+  );

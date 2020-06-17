@@ -1,18 +1,12 @@
 import { ChannelSigner } from "@connext/utils";
 import { CONVENTION_FOR_ETH_ASSET_ID, ProposeMessage } from "@connext/types";
-import { One } from "ethers/constants";
-import { JsonRpcProvider } from "ethers/providers";
-import { BigNumber } from "ethers/utils";
+import { BigNumber, providers, constants } from "ethers";
 
-import { Node } from "../../node";
+import { CFCore } from "../../cfCore";
 
 import { toBeLt } from "../bignumber-jest-matcher";
-import { NetworkContextForTestSuite } from "../contracts";
-import {
-  MemoryLockService,
-  MemoryMessagingService,
-  MemoryStoreServiceFactory,
-} from "../services";
+import { TestContractAddresses } from "../contracts";
+import { MemoryLockService, MemoryMessagingService, MemoryStoreServiceFactory } from "../services";
 import { A_PRIVATE_KEY, B_PRIVATE_KEY } from "../test-constants.jest";
 import {
   collateralizeChannel,
@@ -24,13 +18,15 @@ import {
   newWallet,
 } from "../utils";
 
+const { One } = constants;
+
 expect.extend({ toBeLt });
 
 describe(`Uses a provided signing key generation function to sign channel state updates`, () => {
   let multisigAddress: string;
   jest.setTimeout(10000);
-  let nodeA: Node;
-  let nodeB: Node;
+  let nodeA: CFCore;
+  let nodeB: CFCore;
 
   describe(
     `Node A gets app install proposal, sends to node B, B approves it, installs it, ` +
@@ -38,7 +34,7 @@ describe(`Uses a provided signing key generation function to sign channel state 
     () => {
       beforeEach(async () => {
         const wallet = newWallet(global["wallet"]);
-        const provider = wallet.provider as JsonRpcProvider;
+        const provider = wallet.provider as providers.JsonRpcProvider;
         const messagingService = new MemoryMessagingService();
         const nodeConfig = { STORE_KEY_PREFIX: `test` };
 
@@ -47,10 +43,10 @@ describe(`Uses a provided signing key generation function to sign channel state 
         const storeServiceA = new MemoryStoreServiceFactory().createStoreService();
         await storeServiceA.init();
 
-        nodeA = await Node.create(
+        nodeA = await CFCore.create(
           messagingService,
           storeServiceA,
-          global[`network`],
+          global[`contracts`],
           nodeConfig,
           provider,
           new ChannelSigner(A_PRIVATE_KEY),
@@ -59,10 +55,10 @@ describe(`Uses a provided signing key generation function to sign channel state 
 
         const storeServiceB = new MemoryStoreServiceFactory().createStoreService();
         await storeServiceB.init();
-        nodeB = await Node.create(
+        nodeB = await CFCore.create(
           messagingService,
           storeServiceB,
-          global[`network`],
+          global[`contracts`],
           nodeConfig,
           provider,
           new ChannelSigner(B_PRIVATE_KEY),
@@ -72,7 +68,7 @@ describe(`Uses a provided signing key generation function to sign channel state 
         multisigAddress = await createChannel(nodeA, nodeB);
       });
 
-      it(`install app with ETH`, async done => {
+      it(`install app with ETH`, async (done) => {
         await collateralizeChannel(multisigAddress, nodeA, nodeB);
 
         let preInstallETHBalanceNodeA: BigNumber;
@@ -87,7 +83,7 @@ describe(`Uses a provided signing key generation function to sign channel state 
             multisigAddress,
             CONVENTION_FOR_ETH_ASSET_ID,
           );
-          makeInstallCall(nodeB, msg.data.appIdentityHash);
+          makeInstallCall(nodeB, msg.data.appInstanceId, multisigAddress);
         });
 
         nodeA.on(`INSTALL_EVENT`, async () => {
@@ -113,7 +109,7 @@ describe(`Uses a provided signing key generation function to sign channel state 
         nodeA.rpcRouter.dispatch(
           await makeProposeCall(
             nodeB,
-            (global[`network`] as NetworkContextForTestSuite).TicTacToeApp,
+            (global[`contracts`] as TestContractAddresses).TicTacToeApp,
             multisigAddress,
             undefined,
             One,

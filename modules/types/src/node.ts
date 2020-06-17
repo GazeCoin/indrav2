@@ -8,7 +8,13 @@ import { ContractAddresses } from "./contracts";
 import { MethodResults } from "./methods";
 import { PublicResults } from "./public";
 import { StateChannelJSON } from "./state";
-import { LinkedTransferStatus, HashLockTransferStatus, SignedTransferStatus } from "./transfers";
+import {
+  LinkedTransferStatus,
+  HashLockTransferStatus,
+  SignedTransferStatus,
+  CreatedConditionalTransferMetaMap,
+  ConditionalTransferTypes,
+} from "./transfers";
 import { Collateralizations, RebalanceProfile } from "./misc";
 
 type GetRebalanceProfileResponse = RebalanceProfile;
@@ -22,6 +28,8 @@ type GetHashLockTransferResponse =
       lockHash: Bytes32;
       status: HashLockTransferStatus;
       meta?: any;
+      preImage: Bytes32;
+      expiry: BigNumber;
     }
   | undefined;
 
@@ -100,13 +108,14 @@ export namespace NodeResponses {
   export type GetTransferHistory = GetTransferResponse[];
   export type GetLinkedTransfer = GetLinkedTransferResponse;
   export type GetPendingAsyncTransfers = GetPendingAsyncTransfersResponse;
+  export type InstallConditionalTransferReceiverApp = PublicResults.ResolveCondition;
   export type ResolveLinkedTransfer = PublicResults.ResolveLinkedTransfer;
   export type ResolveSignedTransfer = PublicResults.ResolveSignedTransfer;
   export type GetRebalanceProfile = GetRebalanceProfileResponse;
   export type GetHashLockTransfer = GetHashLockTransferResponse;
-  export type GetSignedTransfer = GetSignedTransferResponse
-  export type GetChannel = GetChannelResponse
-  export type CreateChannel = CreateChannelResponse
-  export type RequestCollateral = RequestCollateralResponse
-  export type ChannelRestore = ChannelRestoreResponse
+  export type GetSignedTransfer = GetSignedTransferResponse;
+  export type GetChannel = GetChannelResponse;
+  export type CreateChannel = CreateChannelResponse;
+  export type RequestCollateral = RequestCollateralResponse;
+  export type ChannelRestore = ChannelRestoreResponse;
 }

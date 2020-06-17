@@ -1,7 +1,6 @@
 import { DEFAULT_APP_TIMEOUT, SWAP_STATE_TIMEOUT } from "@connext/apps";
-import { delayAndThrow, getSignerAddressFromPublicIdentifier, stringify } from "@connext/utils";
+import { stringify } from "@connext/utils";
 import {
-  CF_METHOD_TIMEOUT,
   DefaultApp,
   MethodParams,
   PublicParams,
@@ -19,10 +18,12 @@ import {
   notPositive,
   toBN,
 } from "@connext/utils";
-import { AddressZero, Zero } from "ethers/constants";
-import { BigNumber, formatEther, parseEther } from "ethers/utils";
+import { BigNumber, constants, utils } from "ethers";
 
 import { AbstractController } from "./AbstractController";
+
+const { AddressZero, Zero } = constants;
+const { formatEther, parseEther } = utils;
 
 export class SwapController extends AbstractController {
   public async swap(params: PublicParams.Swap): Promise<PublicResults.Swap> {
@@ -70,14 +71,9 @@ export class SwapController extends AbstractController {
     this.log.debug(`Swap app installed: ${appIdentityHash}, uninstalling`);
 
     // if app installed, that means swap was accepted now uninstall
+
     try {
-      await Promise.race([
-        delayAndThrow(
-          CF_METHOD_TIMEOUT,
-          `App uninstall took longer than ${CF_METHOD_TIMEOUT / 1000} seconds`,
-        ),
-        this.connext.uninstallApp(appIdentityHash),
-      ]);
+      await this.connext.uninstallApp(appIdentityHash);
     } catch (e) {
       const msg = `Failed to uninstall swap: ${e.stack || e.message}`;
       this.log.error(msg);
@@ -181,6 +177,7 @@ export class SwapController extends AbstractController {
       initialState,
       initiatorDeposit: amount,
       initiatorDepositAssetId: fromTokenAddress,
+      multisigAddress: this.connext.multisigAddress,
       outcomeType: appInfo.outcomeType,
       responderIdentifier: this.connext.nodeIdentifier,
       responderDeposit: swappedAmount,

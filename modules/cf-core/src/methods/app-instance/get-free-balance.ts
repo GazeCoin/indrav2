@@ -5,16 +5,19 @@ import {
   CONVENTION_FOR_ETH_ASSET_ID,
 } from "@connext/types";
 import { getAddressFromAssetId } from "@connext/utils";
-import { getAddress } from "ethers/utils";
-import { jsonRpcMethod } from "rpc-server";
+import { utils } from "ethers";
 
-import { RequestHandler } from "../../request-handler";
-import { NodeController } from "../controller";
 import { NO_STATE_CHANNEL_FOR_MULTISIG_ADDR } from "../../errors";
 import { StateChannel } from "../../models";
+import { RequestHandler } from "../../request-handler";
 
-export class GetFreeBalanceStateController extends NodeController {
-  @jsonRpcMethod(MethodNames.chan_getFreeBalanceState)
+import { MethodController } from "../controller";
+
+const { getAddress } = utils;
+
+export class GetFreeBalanceStateController extends MethodController {
+  public readonly methodName = MethodNames.chan_getFreeBalanceState;
+
   public executeMethod = super.executeMethod;
 
   protected async executeMethodImplementation(

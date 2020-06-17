@@ -1,8 +1,7 @@
 import { DEFAULT_APP_TIMEOUT, DEPOSIT_STATE_TIMEOUT } from "@connext/apps";
-import { MinimumViableMultisig } from "@connext/contracts";
+import { ERC20, MinimumViableMultisig } from "@connext/contracts";
 import {
   AppInstanceJson,
-  BigNumber,
   DefaultApp,
   DepositAppName,
   DepositAppState,
@@ -19,12 +18,13 @@ import {
   notGreaterThan,
   notLessThanOrEqualTo,
   toBN,
+  delayAndThrow,
 } from "@connext/utils";
-import { Contract } from "ethers";
-import { AddressZero, Zero } from "ethers/constants";
-import tokenAbi from "human-standard-token-abi";
+import { BigNumber, Contract, constants } from "ethers";
 
 import { AbstractController } from "./AbstractController";
+
+const { AddressZero, Zero } = constants;
 
 export class DepositController extends AbstractController {
   public deposit = async (params: PublicParams.Deposit): Promise<PublicResults.Deposit> => {
@@ -40,7 +40,7 @@ export class DepositController extends AbstractController {
     const startingBalance =
       tokenAddress === AddressZero
         ? await this.ethProvider.getBalance(this.connext.signerAddress)
-        : await new Contract(tokenAddress, tokenAbi, this.ethProvider).functions.balanceOf(
+        : await new Contract(tokenAddress, ERC20.abi, this.ethProvider).balanceOf(
             this.connext.signerAddress,
           );
     this.throwIfAny(notLessThanOrEqualTo(amount, startingBalance), notGreaterThan(amount, Zero));
@@ -50,14 +50,15 @@ export class DepositController extends AbstractController {
     let transactionHash: string;
     try {
       this.log.debug(`Starting deposit`);
+      transactionHash = await this.connext.channelProvider.walletDeposit({
+        amount: amount.toString(),
+        assetId: tokenAddress,
+      });
       this.connext.emit(EventNames.DEPOSIT_STARTED_EVENT, {
         amount: amount,
         assetId: tokenAddress,
         appIdentityHash,
-      } as EventPayloads.DepositStarted);
-      transactionHash = await this.connext.channelProvider.walletDeposit({
-        amount: amount.toString(),
-        assetId: tokenAddress,
+        hash: transactionHash,
       });
       this.log.info(`Sent deposit transaction to chain: ${transactionHash}`);
       const tx = await this.ethProvider.getTransaction(transactionHash);
@@ -106,13 +107,32 @@ export class DepositController extends AbstractController {
       };
     }
 
-    this.log.debug(`Found existing deposit app`);
+    this.log.debug(`Found existing deposit app: ${depositApp.identityHash}`);
     const latestState = depositApp.latestState as DepositAppState;
 
     // check if you are the initiator;
     const initiatorTransfer = latestState.transfers[0];
     if (initiatorTransfer.to !== this.connext.signerAddress) {
-      throw new Error(`Node has unfinalized deposit, cannot request deposit rights for ${assetId}`);
+      this.log.warn(`Found node transfer, waiting 20s to see if app is uninstalled`);
+      await Promise.race([
+        delayAndThrow(
+          20_000,
+          `Node has unfinalized deposit, cannot request deposit rights for ${assetId}`,
+        ),
+        new Promise((resolve) => {
+          this.connext.on(EventNames.UNINSTALL_EVENT, (msg) => {
+            if (msg.appIdentityHash === depositApp.identityHash) {
+              resolve();
+            }
+          });
+        }),
+      ]);
+      const appIdentityHash = await this.proposeDepositInstall(assetId);
+      this.log.info(`Successfully obtained deposit rights for ${assetId}`);
+      return {
+        appIdentityHash,
+        multisigAddress: this.connext.multisigAddress,
+      };
     }
 
     this.log.debug(
@@ -123,7 +143,9 @@ export class DepositController extends AbstractController {
       appIdentityHash: depositApp.identityHash,
       multisigAddress: this.connext.multisigAddress,
     };
-    this.log.info(`requestDepositRights for assetId ${assetId} complete: ${JSON.stringify(result)}`);
+    this.log.info(
+      `requestDepositRights for assetId ${assetId} complete: ${JSON.stringify(result)}`,
+    );
     return result;
   };
 
@@ -163,8 +185,8 @@ export class DepositController extends AbstractController {
       chainId: this.ethProvider.network.chainId,
     })) as DefaultApp;
     const depositApp = appInstances.find(
-      appInstance =>
-        appInstance.appInterface.addr === depositAppInfo.appDefinitionAddress &&
+      (appInstance) =>
+        appInstance.appDefinition === depositAppInfo.appDefinitionAddress &&
         (appInstance.latestState as DepositAppState).assetId === params.assetId,
     );
 
@@ -184,18 +206,19 @@ export class DepositController extends AbstractController {
     // generate initial totalAmountWithdrawn
     const multisig = new Contract(
       this.connext.multisigAddress,
-      MinimumViableMultisig.abi as any,
+      MinimumViableMultisig.abi,
       this.ethProvider,
     );
 
     let startingTotalAmountWithdrawn: BigNumber;
     try {
-      startingTotalAmountWithdrawn = await multisig.functions.totalAmountWithdrawn(tokenAddress);
+      startingTotalAmountWithdrawn = await multisig.totalAmountWithdrawn(tokenAddress);
     } catch (e) {
-      const NOT_DEPLOYED_ERR = `contract not deployed (contractAddress="${this.connext.multisigAddress}"`;
+      const NOT_DEPLOYED_ERR = `CALL_EXCEPTION`;
       if (!e.message.includes(NOT_DEPLOYED_ERR)) {
         throw new Error(e);
       }
+
       // multisig is deployed on withdrawal, if not
       // deployed withdrawal amount is 0
       startingTotalAmountWithdrawn = Zero;
@@ -205,7 +228,7 @@ export class DepositController extends AbstractController {
     const startingMultisigBalance =
       tokenAddress === AddressZero
         ? await this.ethProvider.getBalance(this.connext.multisigAddress)
-        : await new Contract(tokenAddress, tokenAbi, this.ethProvider).functions.balanceOf(
+        : await new Contract(tokenAddress, ERC20.abi, this.ethProvider).balanceOf(
             this.connext.multisigAddress,
           );
 
@@ -246,6 +269,7 @@ export class DepositController extends AbstractController {
       initialState,
       initiatorDeposit: Zero,
       initiatorDepositAssetId: assetId,
+      multisigAddress: this.connext.multisigAddress,
       outcomeType,
       responderIdentifier: this.connext.nodeIdentifier,
       responderDeposit: Zero,

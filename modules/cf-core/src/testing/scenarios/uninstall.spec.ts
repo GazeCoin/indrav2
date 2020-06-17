@@ -1,10 +1,10 @@
-import { CONVENTION_FOR_ETH_ASSET_ID, EventNames, UninstallMessage } from "@connext/types";
-import { One, Two, Zero } from "ethers/constants";
+import { CONVENTION_FOR_ETH_ASSET_ID, EventNames, ProtocolEventMessage } from "@connext/types";
+import { constants, utils } from "ethers";
 
-import { Node } from "../../node";
+import { CFCore } from "../../cfCore";
 
 import { toBeEq } from "../bignumber-jest-matcher";
-import { NetworkContextForTestSuite } from "../contracts";
+import { TestContractAddresses } from "../contracts";
 import { setup, SetupContext } from "../setup";
 import {
   assertMessage,
@@ -15,19 +15,21 @@ import {
   getInstalledAppInstances,
   installApp,
 } from "../utils";
-import { isHexString } from "ethers/utils";
+
+const { One, Two, Zero } = constants;
+const { isHexString } = utils;
 
 expect.extend({ toBeEq });
 
-const { TicTacToeApp } = global["network"] as NetworkContextForTestSuite;
+const { TicTacToeApp } = global["contracts"] as TestContractAddresses;
 
 function assertUninstallMessage(
   senderId: string,
   multisigAddress: string,
   appIdentityHash: string,
-  msg: UninstallMessage,
+  msg: ProtocolEventMessage<"UNINSTALL_EVENT">,
 ) {
-  assertMessage(msg, {
+  assertMessage<typeof EventNames.UNINSTALL_EVENT>(msg, {
     from: senderId,
     type: EventNames.UNINSTALL_EVENT,
     data: {
@@ -38,8 +40,8 @@ function assertUninstallMessage(
 }
 
 describe("Node A and B install apps of different outcome types, then uninstall them to test outcomes types and interpreters", () => {
-  let nodeA: Node;
-  let nodeB: Node;
+  let nodeA: CFCore;
+  let nodeB: CFCore;
 
   describe("Tests for different outcomes of the TwoPartyFixedOutcome type", () => {
     let appIdentityHash: string;
@@ -92,7 +94,7 @@ describe("Node A and B install apps of different outcome types, then uninstall t
 
       await Promise.all([
         new Promise(async (resolve, reject) => {
-          nodeB.on(EventNames.UNINSTALL_EVENT, async (msg: UninstallMessage) => {
+          nodeB.on(EventNames.UNINSTALL_EVENT, async (msg) => {
             if (msg.data.appIdentityHash !== appIdentityHash) {
               return;
             }
@@ -111,7 +113,7 @@ describe("Node A and B install apps of different outcome types, then uninstall t
         }),
         new Promise(async (resolve, reject) => {
           try {
-            await nodeA.rpcRouter.dispatch(constructUninstallRpc(appIdentityHash));
+            await nodeA.rpcRouter.dispatch(constructUninstallRpc(appIdentityHash, multisigAddress));
 
             const balancesSeenByA = await getFreeBalanceState(nodeA, multisigAddress);
             expect(balancesSeenByA[nodeA.signerAddress]).toBeEq(Zero);
@@ -145,7 +147,7 @@ describe("Node A and B install apps of different outcome types, then uninstall t
 
       await Promise.all([
         new Promise(async (resolve, reject) => {
-          nodeB.on(EventNames.UNINSTALL_EVENT, async (msg: UninstallMessage) => {
+          nodeB.on(EventNames.UNINSTALL_EVENT, async (msg) => {
             if (msg.data.appIdentityHash !== appIdentityHash) {
               return;
             }
@@ -164,7 +166,7 @@ describe("Node A and B install apps of different outcome types, then uninstall t
         }),
         new Promise(async (resolve, reject) => {
           try {
-            await nodeA.rpcRouter.dispatch(constructUninstallRpc(appIdentityHash));
+            await nodeA.rpcRouter.dispatch(constructUninstallRpc(appIdentityHash, multisigAddress));
 
             const balancesSeenByA = await getFreeBalanceState(nodeA, multisigAddress);
             expect(balancesSeenByA[nodeB.signerAddress]).toBeEq(Zero);
@@ -197,7 +199,7 @@ describe("Node A and B install apps of different outcome types, then uninstall t
 
       await Promise.all([
         new Promise(async (resolve, reject) => {
-          nodeB.on(EventNames.UNINSTALL_EVENT, async (msg: UninstallMessage) => {
+          nodeB.on(EventNames.UNINSTALL_EVENT, async (msg) => {
             if (msg.data.appIdentityHash !== appIdentityHash) {
               return;
             }
@@ -216,7 +218,7 @@ describe("Node A and B install apps of different outcome types, then uninstall t
         }),
         new Promise(async (resolve, reject) => {
           try {
-            await nodeA.rpcRouter.dispatch(constructUninstallRpc(appIdentityHash));
+            await nodeA.rpcRouter.dispatch(constructUninstallRpc(appIdentityHash, multisigAddress));
 
             const balancesSeenByA = await getFreeBalanceState(nodeA, multisigAddress);
             expect(balancesSeenByA[nodeA.signerAddress]).toBeEq(depositAmount);

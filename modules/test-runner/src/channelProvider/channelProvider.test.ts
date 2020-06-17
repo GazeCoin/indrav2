@@ -1,6 +1,6 @@
 import { EventNames, IConnextClient, CONVENTION_FOR_ETH_ASSET_ID } from "@connext/types";
 import { getAddressFromAssetId, getSignerAddressFromPublicIdentifier } from "@connext/utils";
-import { AddressZero, One } from "ethers/constants";
+import { constants } from "ethers";
 
 import {
   AssetOptions,
@@ -15,6 +15,8 @@ import {
   withdrawFromChannel,
 } from "../util";
 
+const { AddressZero, One } = constants;
+
 describe("ChannelProvider", () => {
   let client: IConnextClient;
   let remoteClient: IConnextClient;
@@ -27,7 +29,7 @@ describe("ChannelProvider", () => {
     remoteClient = await createRemoteClient(await createChannelProvider(client));
     nodeIdentifier = client.config.nodeIdentifier;
     nodeSignerAddress = client.nodeSignerAddress;
-    tokenAddress = client.config.contractAddresses.Token;
+    tokenAddress = client.config.contractAddresses.Token!;
   });
 
   afterEach(async () => {
@@ -35,7 +37,7 @@ describe("ChannelProvider", () => {
   });
 
   it("Happy case: remote client can be instantiated with a channelProvider", async () => {
-    const _tokenAddress = remoteClient.config.contractAddresses.Token;
+    const _tokenAddress = remoteClient.config.contractAddresses.Token!;
     const _nodeIdentifier = remoteClient.config.nodeIdentifier;
     const _nodeSignerAddress = getSignerAddressFromPublicIdentifier(nodeIdentifier);
     expect(_tokenAddress).to.be.eq(tokenAddress);
@@ -62,19 +64,11 @@ describe("ChannelProvider", () => {
     const clientB = await createClient({ id: "B" });
     await clientB.requestCollateral(tokenAddress);
 
-    const transferFinished = Promise.all([
-      new Promise(async (resolve) => {
-        await clientB.messaging.subscribe(
-          `${client.nodeIdentifier}.channel.*.app-instance.*.uninstall`,
-          resolve,
-        );
-      }),
-      new Promise(async (resolve) => {
-        clientB.once(EventNames.CONDITIONAL_TRANSFER_UNLOCKED_EVENT, async () => {
-          resolve();
-        });
-      }),
-    ]);
+    const transferFinished = new Promise(async (resolve) => {
+      clientB.once(EventNames.CONDITIONAL_TRANSFER_UNLOCKED_EVENT, async () => {
+        resolve();
+      });
+    });
 
     await remoteClient.transfer({
       amount: transfer.amount.toString(),

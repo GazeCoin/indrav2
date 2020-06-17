@@ -7,7 +7,7 @@ import {
   ProtocolRoles,
   UninstallMiddlewareContext,
 } from "@connext/types";
-import { JsonRpcProvider } from "ethers/providers";
+import { providers } from "ethers";
 import { getSignerAddressFromPublicIdentifier, logTime, stringify } from "@connext/utils";
 
 import { UNASSIGNED_SEQ_NO } from "../constants";
@@ -15,11 +15,7 @@ import { getSetStateCommitment } from "../ethereum";
 import { AppInstance, StateChannel } from "../models";
 import { Context, PersistAppType, ProtocolExecutionFlow } from "../types";
 
-import {
-  assertIsValidSignature,
-  computeTokenIndexedFreeBalanceIncrements,
-  stateChannelClassFromStoreByMultisig,
-} from "./utils";
+import { assertIsValidSignature, computeTokenIndexedFreeBalanceIncrements } from "./utils";
 
 const protocol = ProtocolNames.uninstall;
 const { OP_SIGN, OP_VALIDATE, IO_SEND, IO_SEND_AND_WAIT, PERSIST_APP_INSTANCE } = Opcode;
@@ -30,7 +26,7 @@ const { OP_SIGN, OP_VALIDATE, IO_SEND, IO_SEND_AND_WAIT, PERSIST_APP_INSTANCE } 
  */
 export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
   0 /* Initiating */: async function* (context: Context) {
-    const { message, store, network } = context;
+    const { message, network, preProtocolStateChannel } = context;
     const log = context.log.newContext("CF-UninstallProtocol");
     const start = Date.now();
     let substart = start;
@@ -41,16 +37,16 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
     const {
       responderIdentifier,
       appIdentityHash,
-      multisigAddress,
+      action,
+      stateTimeout,
     } = params as ProtocolParams.Uninstall;
 
-    const preProtocolStateChannel = await stateChannelClassFromStoreByMultisig(
-      multisigAddress,
-      store,
-    );
+    if (!preProtocolStateChannel) {
+      throw new Error("No state channel found for uninstall");
+    }
     const appToUninstall = preProtocolStateChannel.getAppInstance(appIdentityHash);
 
-    yield [
+    const error = yield [
       OP_VALIDATE,
       protocol,
       {
@@ -60,19 +56,48 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
         stateChannel: preProtocolStateChannel.toJson(),
       } as UninstallMiddlewareContext,
     ];
+    if (!!error) {
+      throw new Error(error);
+    }
     logTime(log, substart, `[${processID}] Validated uninstall request`);
     substart = Date.now();
 
-    // 47ms
+    let preUninstallStateChannel: StateChannel;
+    if (action) {
+      log.info(`Action provided. Finalizing app before uninstall`);
+      // apply action
+      substart = Date.now();
+      const newState = await appToUninstall.computeStateTransition(action, network.provider);
+      logTime(log, substart, `[${processID}] computeStateTransition for action complete`);
+      // ensure state is finalized after applying action
+      if (!(newState as any).finalized) {
+        throw new Error(`Action provided did not lead to terminal state, refusing to uninstall.`);
+      }
+      log.debug(`Resulting state is terminal state, proceeding with uninstall`);
+      substart = Date.now();
+      preUninstallStateChannel = preProtocolStateChannel.setState(
+        appToUninstall,
+        newState,
+        stateTimeout,
+      );
+      logTime(log, substart, `[${processID}] setState for action complete`);
+    } else {
+      preUninstallStateChannel = preProtocolStateChannel;
+    }
+    // make sure the uninstalled app is the finalized app
+    const preUninstallApp = preUninstallStateChannel.appInstances.get(appToUninstall.identityHash)!;
+
+    substart = Date.now();
     const postProtocolStateChannel = await computeStateTransition(
       params as ProtocolParams.Uninstall,
       network.provider,
-      preProtocolStateChannel,
-      appToUninstall,
+      preUninstallStateChannel,
+      preUninstallApp,
       log,
     );
+    logTime(log, substart, `[${processID}] computeStateTransition for uninstall complete`);
 
-    // 0ms
+    substart = Date.now();
     const responderFreeBalanceKey = getSignerAddressFromPublicIdentifier(responderIdentifier);
 
     const uninstallCommitment = getSetStateCommitment(
@@ -126,7 +151,7 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
       PERSIST_APP_INSTANCE,
       PersistAppType.RemoveInstance,
       postProtocolStateChannel,
-      appToUninstall,
+      preUninstallApp,
       uninstallCommitment,
     ];
 
@@ -135,7 +160,7 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
   } as any,
 
   1 /* Responding */: async function* (context: Context) {
-    const { message, store, network } = context;
+    const { message, preProtocolStateChannel, network } = context;
     const log = context.log.newContext("CF-UninstallProtocol");
     const start = Date.now();
     let substart = start;
@@ -146,16 +171,16 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
     const {
       initiatorIdentifier,
       appIdentityHash,
-      multisigAddress,
+      action,
+      stateTimeout,
     } = params as ProtocolParams.Uninstall;
 
-    const preProtocolStateChannel = await stateChannelClassFromStoreByMultisig(
-      multisigAddress,
-      store,
-    );
+    if (!preProtocolStateChannel) {
+      throw new Error("No state channel found for proposal");
+    }
     const appToUninstall = preProtocolStateChannel.getAppInstance(appIdentityHash);
 
-    yield [
+    const error = yield [
       OP_VALIDATE,
       protocol,
       {
@@ -165,19 +190,48 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
         stateChannel: preProtocolStateChannel.toJson(),
       } as UninstallMiddlewareContext,
     ];
+    if (!!error) {
+      throw new Error(error);
+    }
     logTime(log, substart, `[${processID}] Validated uninstall request`);
     substart = Date.now();
 
-    // 40ms
+    let preUninstallStateChannel: StateChannel;
+    if (action) {
+      log.info(`Action provided. Finalizing app before uninstall`);
+      // apply action
+      substart = Date.now();
+      const newState = await appToUninstall.computeStateTransition(action, network.provider);
+      logTime(log, substart, `[${processID}] computeStateTransition for action complete`);
+      // ensure state is finalized after applying action
+      if (!(newState as any).finalized) {
+        throw new Error(`Action provided did not lead to terminal state, refusing to uninstall.`);
+      }
+      log.debug(`Resulting state is terminal state, proceeding with uninstall`);
+      substart = Date.now();
+      preUninstallStateChannel = preProtocolStateChannel.setState(
+        appToUninstall,
+        newState,
+        stateTimeout,
+      );
+      logTime(log, substart, `[${processID}] setState for action complete`);
+    } else {
+      preUninstallStateChannel = preProtocolStateChannel;
+    }
+    // make sure the uninstalled app is the finalized app
+    const preUninstallApp = preUninstallStateChannel.appInstances.get(appToUninstall.identityHash)!;
+
+    substart = Date.now();
     const postProtocolStateChannel = await computeStateTransition(
       params as ProtocolParams.Uninstall,
       network.provider,
-      preProtocolStateChannel,
-      appToUninstall,
+      preUninstallStateChannel,
+      preUninstallApp,
       log,
     );
+    logTime(log, substart, `[${processID}] computeStateTransition for uninstall complete`);
 
-    // 0ms
+    substart = Date.now();
     const initiatorFreeBalanceKey = getSignerAddressFromPublicIdentifier(initiatorIdentifier);
 
     const uninstallCommitment = getSetStateCommitment(
@@ -216,7 +270,7 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
       PERSIST_APP_INSTANCE,
       PersistAppType.RemoveInstance,
       postProtocolStateChannel,
-      appToUninstall,
+      preUninstallApp,
       uninstallCommitment,
     ];
 
@@ -233,6 +287,7 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
         },
       } as ProtocolMessageData,
       postProtocolStateChannel,
+      preUninstallApp,
     ];
 
     // 100ms
@@ -242,20 +297,13 @@ export const UNINSTALL_PROTOCOL: ProtocolExecutionFlow = {
 
 async function computeStateTransition(
   params: ProtocolParams.Uninstall,
-  provider: JsonRpcProvider,
+  provider: providers.JsonRpcProvider,
   stateChannel: StateChannel,
   appInstance: AppInstance,
   log?: ILoggerService,
 ) {
-  const { blockNumberToUseIfNecessary } = params;
   return stateChannel.uninstallApp(
     appInstance,
-    await computeTokenIndexedFreeBalanceIncrements(
-      appInstance,
-      provider,
-      undefined,
-      blockNumberToUseIfNecessary,
-      log,
-    ),
+    await computeTokenIndexedFreeBalanceIncrements(appInstance, provider, undefined, log),
   );
 }

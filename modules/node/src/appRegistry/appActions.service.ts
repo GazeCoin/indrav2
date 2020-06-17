@@ -1,33 +1,23 @@
 import {
   AppAction,
   AppState,
-  HashLockTransferAppAction,
-  HashLockTransferAppName,
-  HashLockTransferAppState,
-  SimpleSignedTransferAppAction,
-  SimpleSignedTransferAppState,
-  SimpleLinkedTransferAppAction,
-  SimpleLinkedTransferAppName,
-  SimpleLinkedTransferAppState,
-  SimpleSignedTransferAppName,
   WithdrawAppAction,
   WithdrawAppName,
   WithdrawAppState,
   AppInstanceJson,
+  ConditionalTransferAppNames,
+  SupportedApplicationNames,
+  SingleAssetTwoPartyCoinTransferInterpreterParams,
+  SingleAssetTwoPartyCoinTransferInterpreterParamsJson,
 } from "@connext/types";
-import { SupportedApplications } from "@connext/apps";
 import { Injectable } from "@nestjs/common";
-import { soliditySha256 } from "ethers/utils";
 
 import { LoggerService } from "../logger/logger.service";
 import { CFCoreService } from "../cfCore/cfCore.service";
 import { WithdrawRepository } from "../withdraw/withdraw.repository";
 import { WithdrawService } from "../withdraw/withdraw.service";
-import { AppInstanceRepository } from "../appInstance/appInstance.repository";
-import { SignedTransferService } from "../signedTransfer/signedTransfer.service";
-import { HashLockTransferService } from "../hashLockTransfer/hashLockTransfer.service";
-import { AppInstance } from "../appInstance/appInstance.entity";
-import { getRandomBytes32, stringify } from "@connext/utils";
+import { AppInstance, AppType } from "../appInstance/appInstance.entity";
+import { TransferService } from "../transfer/transfer.service";
 
 @Injectable()
 export class AppActionsService {
@@ -35,16 +25,14 @@ export class AppActionsService {
     private readonly log: LoggerService,
     private readonly withdrawService: WithdrawService,
     private readonly cfCoreService: CFCoreService,
-    private readonly signedTransferService: SignedTransferService,
-    private readonly hashlockTransferService: HashLockTransferService,
+    private readonly transferService: TransferService,
     private readonly withdrawRepository: WithdrawRepository,
-    private readonly appInstanceRepository: AppInstanceRepository,
   ) {
     this.log.setContext("AppRegistryService");
   }
 
   async handleAppAction(
-    appName: SupportedApplications,
+    appName: SupportedApplicationNames,
     app: AppInstanceJson,
     newState: AppState,
     action: AppAction,
@@ -54,46 +42,21 @@ export class AppActionsService {
         action,
       )} started`,
     );
-    switch (appName) {
-      case WithdrawAppName: { // Special case
-        await this.handleWithdrawAppAction(
-          app,
-          action as WithdrawAppAction,
-          newState as WithdrawAppState,
+
+    if (Object.keys(ConditionalTransferAppNames).includes(appName)) {
+      const senderApp = await this.transferService.findSenderAppByPaymentId(app.meta.paymentId);
+      if (!senderApp) {
+        throw new Error(
+          `Action taken on tranfer app without corresponding sender app! ${app.identityHash}`,
         );
-        break;
       }
-      case SimpleLinkedTransferAppName: {
-        const senderApp = await this.appInstanceRepository.findLinkedTransferAppByPaymentIdAndReceiver(
-          (newState as SimpleLinkedTransferAppState).paymentId,
-          this.cfCoreService.cfCore.signerAddress,
-        );
-        await this.handleTransferAppAction(senderApp, action)
-        break;
-      }
-      case HashLockTransferAppName: {
-        const senderApp = await this.hashlockTransferService.findSenderAppByLockHashAndAssetId(
-          soliditySha256(["bytes32"], [(action as HashLockTransferAppAction).preImage]),
-          app.singleAssetTwoPartyCoinTransferInterpreterParams.tokenAddress,
-        );
-        if (!senderApp) {
-          throw new Error(
-            `Action taken on HashLockTransferApp without corresponding sender app! ${app.identityHash}`,
-          );
-        }
-        await this.handleTransferAppAction(senderApp, action)
-        break;
-      }
-      case SimpleSignedTransferAppName: {
-        const senderApp = await this.signedTransferService.findSenderAppByPaymentId((newState as SimpleLinkedTransferAppState).paymentId);
-        if (!senderApp) {
-          throw new Error(
-            `Action taken on HashLockTransferApp without corresponding sender app! ${app.identityHash}`,
-          );
-        }
-        await this.handleTransferAppAction(senderApp, action)
-        break;
-      }
+      await this.handleTransferAppAction(senderApp, action);
+    } else if (appName === WithdrawAppName) {
+      await this.handleWithdrawAppAction(
+        app,
+        action as WithdrawAppAction,
+        newState as WithdrawAppState,
+      );
     }
     this.log.info(`handleAppAction for app name ${appName} ${app.identityHash} complete`);
   }
@@ -117,7 +80,8 @@ export class AppActionsService {
     const commitment = await this.cfCoreService.createWithdrawCommitment(
       {
         amount: state.transfers[0].amount,
-        assetId: appInstance.singleAssetTwoPartyCoinTransferInterpreterParams.tokenAddress,
+        assetId: (appInstance.outcomeInterpreterParameters as SingleAssetTwoPartyCoinTransferInterpreterParamsJson)
+          .tokenAddress,
         recipient: this.cfCoreService.cfCore.signerAddress,
         nonce: state.nonce,
       },
@@ -136,7 +100,15 @@ export class AppActionsService {
     senderApp: AppInstance<any>,
     action: AppAction,
   ): Promise<void> {
-    await this.cfCoreService.takeAction(senderApp.identityHash, action);
-    await this.cfCoreService.uninstallApp(senderApp.identityHash);
+    // App could be uninstalled, which means the channel is no longer
+    // associated with this app instance
+    if (senderApp.type !== AppType.INSTANCE) {
+      return;
+    }
+    await this.cfCoreService.uninstallApp(
+      senderApp.identityHash,
+      senderApp.channel.multisigAddress,
+      action,
+    );
   }
 }

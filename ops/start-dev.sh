@@ -9,6 +9,11 @@ echo 'start-dev.sh '$project
 # Turn on swarm mode if it's not already on
 docker swarm init 2> /dev/null || true
 
+# Deploy with an attachable network so tests & the daicard can connect to individual components
+# Delete/recreate the network first to delay docker network slowdowns that have been happening
+docker network rm $project 2> /dev/null || true
+docker network create --attachable --driver overlay $project
+
 ####################
 # Load env vars
 
@@ -58,14 +63,7 @@ nats_port=4222
 node_port=8080
 dash_port=9999
 webserver_port=3000
-ganacheId="4447"
-
-# Prefer top-level address-book override otherwise default to one in contracts
-if [[ -f address-book.json ]]
-then eth_contract_addresses="`cat address-book.json | tr -d ' \n\r'`"
-else eth_contract_addresses="`cat modules/contracts/address-book.json | tr -d ' \n\r'`"
-fi
-eth_mnemonic="candy maple cake sugar pudding cream honey rich smooth crumble sweet treat"
+ganacheId="1337"
 
 if [[ "$INDRA_ETH_PROVIDER" == "$ganacheProvider" ]]
 then chainId="$ganacheId"
@@ -74,16 +72,25 @@ else
   chainId="`curl -q -k -s -H "Content-Type: application/json" -X POST --data '{"id":1,"jsonrpc":"2.0","method":"net_version","params":[]}' $INDRA_ETH_PROVIDER | jq .result | tr -d '"'`"
 fi
 
+if [[ "$chainId" == "$ganacheId" ]]
+then make deployed-contracts
+fi
+
+# Prefer top-level address-book override otherwise default to one in contracts
+if [[ -f address-book.json ]]
+then eth_contract_addresses="`cat address-book.json | tr -d ' \n\r'`"
+else eth_contract_addresses="`cat modules/contracts/address-book.json | tr -d ' \n\r'`"
+fi
+eth_mnemonic="candy maple cake sugar pudding cream honey rich smooth crumble sweet treat"
+
 token_address="`echo $eth_contract_addresses | jq '.["'"$chainId"'"].Token.address' | tr -d '"'`"
 allowed_swaps='[{"from":"'"$token_address"'","to":"0x0000000000000000000000000000000000000000","priceOracleType":"HARDCODED"},{"from":"0x0000000000000000000000000000000000000000","to":"'"$token_address"'","priceOracleType":"HARDCODED"}]'
+
+supported_tokens="$token_address,0x0000000000000000000000000000000000000000"
 
 if [[ -z "$chainId" || "$chainId" == "null" ]]
 then echo "Failed to fetch chainId from provider ${INDRA_ETH_PROVIDER}" && exit 1;
 else echo "Got chainId $chainId, using token $token_address"
-fi
-
-if [[ "$chainId" == "$ganacheId" ]]
-then make deployed-contracts
 fi
 
 # database connection settings
@@ -133,12 +140,9 @@ else
   proxy:
     image: '$proxy_image'
     environment:
-      DOMAINNAME: 'localhost'
-      EMAIL: 'noreply@gmail.com'
       ETH_PROVIDER_URL: '$INDRA_ETH_PROVIDER'
       MESSAGING_TCP_URL: 'nats:4222'
       MESSAGING_WS_URL: 'nats:4221'
-      MODE: 'dev'
       NODE_URL: 'node:8080'
       WEBSERVER_URL: 'webserver:3000'
     networks:
@@ -221,6 +225,7 @@ services:
     environment:
       INDRA_ADMIN_TOKEN: '$INDRA_ADMIN_TOKEN'
       INDRA_ALLOWED_SWAPS: '$allowed_swaps'
+      INDRA_SUPPORTED_TOKENS: '$supported_tokens'
       INDRA_ETH_CONTRACT_ADDRESSES: '$eth_contract_addresses'
       INDRA_ETH_MNEMONIC: '$eth_mnemonic'
       INDRA_ETH_RPC_URL: '$INDRA_ETH_PROVIDER'
@@ -241,6 +246,7 @@ services:
       - '$project'
     ports:
       - '$node_port:$node_port'
+      - '9229:9229'
     secrets:
       - '${project}_database_dev'
     volumes:
