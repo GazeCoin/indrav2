@@ -84,7 +84,7 @@ export class TransferService {
           this.log.info(`Installed receiver app ${receiverInstall.appIdentityHash}`);
         })
         .catch((e) => {
-          this.log.error(`Error installing receiver app: ${e.message}`);
+          this.log.error(`Error installing receiver app: ${e.message || e}`);
           if (allowed === "RequireOnline") {
             throw e;
           }
@@ -187,7 +187,7 @@ export class TransferService {
       assetId,
       Zero,
       assetId,
-      transferType,
+      this.cfCoreService.getAppInfoByName(transferType as SupportedApplicationNames),
       meta,
       TRANSFER_TIMEOUT,
     );
