@@ -113,6 +113,11 @@ node_image="$builder_image"
 proxy_image="${project}_proxy"
 redis_image="redis:5-alpine"
 
+if [[ "`pwd`" =~ /mnt/c/(.*) ]]
+then home_dir="//c/${BASH_REMATCH[1]}"
+else home_dir="`pwd`"
+fi
+
 ####################
 # Deploy according to above configuration
 
@@ -132,7 +137,7 @@ else
   elif [[ "$INDRA_UI" == "daicard" ]]
   then webserver_working_dir=/root/modules/daicard
   else
-    echo "INDRA_UI: Expected headless, dashboard, or daicard"
+    echo "INDRA_UI: Expected headless, dashboard, daicard, or dcwallet"
     exit 1
   fi
   number_of_services=$(( $number_of_services + 2 ))
@@ -190,6 +195,19 @@ function new_secret {
 }
 new_secret "${project}_database_dev" "$project"
 
+eth_mnemonic_name="${project}_mnemonic_$INDRA_ETH_NETWORK"
+
+if [[ "$INDRA_ETH_NETWORK" != "ganache" ]]
+then
+  eth_secret=" $eth_mnemonic_name
+    external: true"
+  eth_secret_name="- $eth_mnemonic_name"
+else
+  eth_secret=""
+  eth_secret_name=""
+fi
+echo "ETH secret: $eth_secret"
+
 # Deploy with an attachable network so tests & the daicard can connect to individual components
 if [[ -z "`docker network ls -f name=$project | grep -w $project`" ]]
 then
@@ -209,6 +227,7 @@ networks:
 secrets:
   ${project}_database_dev:
     external: true
+  $eth_secret
 
 volumes:
   certs:

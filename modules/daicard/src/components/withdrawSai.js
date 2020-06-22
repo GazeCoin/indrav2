@@ -23,7 +23,7 @@ export const WithdrawSaiDialog = ({ channel, ethProvider, machine, state, saiBal
     machine.send("START_WITHDRAW");
     const result = await channel.withdraw({
       amount: saiBalance.toString(),
-      assetId: channel.config.contractAddresses.SAIToken,
+      assetId: channel.config.contractAddresses.CreditToken,
       recipient: recipient.value,
     });
     console.log(`Cashout result: ${JSON.stringify(result)}`);

@@ -38,7 +38,7 @@ export const DepositCard = style(({ address, history, maxDeposit }) => {
           <span> Send funds to this address to deposit. </span>
         </Typography>
         <Typography variant="body2">
-          <span>{`Up to ${maxEth || "?.??"} Eth 
+          <span>{`Up to ${maxEth || "?.??"} Eth
                     or ${maxDai ||
                       "?.??"} Dai will be deposited into the state channel, any leftovers will be kept on-chain`}</span>
         </Typography>

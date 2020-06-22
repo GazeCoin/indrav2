@@ -54,7 +54,7 @@ release: database ethprovider proxy node-release test-runner-release webserver
 ########################################
 # Command & Control Shortcuts
 
-start: start-daicard
+start: start-dcwallet
 
 start-headless: dev
 	INDRA_UI=headless bash ops/start-dev.sh

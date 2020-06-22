@@ -93,7 +93,7 @@ export class Currency {
   }
 
   public isTokenType(type?: any) {
-    return ["DAI", "DEI"].includes(type || this.type);
+    return ["DAI", "DEI", "TIP", "TEI"].includes(type || this.type);
   }
 
   public toBN() {
@@ -165,6 +165,8 @@ export class Currency {
   public toETH = (daiRate: any) => this._convert("ETH", daiRate);
   public toFIN = (daiRate: any) => this._convert("FIN", daiRate);
   public toWEI = (daiRate: any) => this._convert("WEI", daiRate);
+  public toTIP = (daiRate: any) => this._convert("TIP", daiRate);
+  public toTEI = (daiRate: any) => this._convert("TEI", daiRate);
 
   ////////////////////////////////////////
   // Private Methods

@@ -8,6 +8,7 @@ import "../App.css";
 
 import { ChannelCard } from "./channelCard";
 import { QRScan } from "./qrCode";
+import Onboarding from "./Onboarding";
 
 import { initWalletConnect } from "../utils";
 

@@ -1,5 +1,5 @@
 import { AppBar, Toolbar, IconButton, Typography, Grid, Button } from "@material-ui/core";
-import { Settings as SettingIcon } from "@material-ui/icons";
+import { Settings as SettingIcon, ExitToApp as ExitToAppIcon } from "@material-ui/icons";
 import blockies from "ethereum-blockies-png";
 import React from "react";
 import { Link } from "react-router-dom";
@@ -53,6 +53,20 @@ export const AppBarComponent = props => (
               </IconButton>
             </Grid>
             <Grid item xs={5}>
+            <a href="uniwebview://action?key=ReturnToUnity" >
+              <Button
+                size="small"
+                variant="outlined"
+                style={{
+                  color: "#c1c6ce",
+                  borderColor: "#c1c6ce",
+                  fontSize: "small"
+                }}
+                component="span"
+              >
+                <ExitToAppIcon style={{ marginLeft: "3px" }} />
+              </Button>
+            </a>
               <Button
                 disableTouchRipple
                 size="small"

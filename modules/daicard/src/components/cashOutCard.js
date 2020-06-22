@@ -17,7 +17,7 @@ const style = withStyles((theme) => ({
     height: "40px",
   },
   button: {
-    backgroundColor: "#FCA311",
+    backgroundColor: "#3C0E5E",
     color: "#FFF",
     fontSize: "smaller",
   },

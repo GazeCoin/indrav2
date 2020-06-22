@@ -4,7 +4,7 @@
   /* background-color: #fcfbf3; */
   /* background-color:  //#c8d0de */
   /* background-color: #F4F5F7; */
-  background-color: #fff;
+  background-color: #282b2e;
   width: 100%;
   height: 100%;
 }
@@ -28,7 +28,7 @@
   font-family: "proxima-nova", sans-serif;
 }
 .modal_inner {
-  background-color: #fff;
+  background-color: #282b2e;
   box-shadow: 1px 1px 1px 1px black;
   padding: 2% 2% 2% 2%;
   transform: translate(23vmax, 13vmax);

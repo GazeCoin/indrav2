@@ -1,6 +1,5 @@
 #!/bin/bash
 set -e
-
 this_user="`id -u`:`id -g`"
 user="$1"
 cmd="$2"

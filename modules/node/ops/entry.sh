@@ -62,4 +62,3 @@ else
     exec node --no-deprecation dist/src/main.js
   fi
 fi
-

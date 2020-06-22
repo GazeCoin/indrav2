@@ -37,7 +37,7 @@ const style = withStyles((theme) => ({
     color: "#F22424",
   },
   button: {
-    backgroundColor: "#FCA311",
+    backgroundColor: "#3C0E5E",
     color: "#FFF",
     marginBottom: "2em",
     marginTop: "2em",

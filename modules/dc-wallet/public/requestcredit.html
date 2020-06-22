@@ -1,0 +1,61 @@
+<html>
+  <head>
+    <style>
+      .header {
+        background-color: #3322f1;
+        padding: 20px;
+        text-align: center;
+        color: #ffffff;
+      }
+      .button {
+        background-color: #2e4c96;
+        color: #ffffff;
+        text-align: center;
+        padding: 16px 32px;
+        font-size: 24px;
+        border: 0px;
+      }
+    </style>
+    <script>
+      async function handleSubmit (e) {
+        //e.preventDefault();
+        var search = window.location.search;
+        //console.log(window.location.search);
+        if (search) {
+          var params = search.split('&');
+          var param0 = params[0].split('=');
+          var ethAddress = (param0.length > 1) ? param0[1] : null;
+          console.log('have ethaddress: ', ethAddress);
+          var param1 = params.length > 1 ? params[1].split('=') : [];
+          var associatedAddress = (param1.length > 1) ? param1[1] : null;
+          const options = {
+            method: 'GET',
+            mode: 'no-cors',
+            headers: {
+              'Content-Type': 'application/json',
+            }
+          };
+          if (ethAddress) {
+            // Send
+            fetch('https://adbot.gazecoin.xyz/requestgrant/' + ethAddress + '/P', options);
+          }
+
+          if (associatedAddress) {
+            fetch('https://adbot.gazecoin.xyz/requestgrant/' + associatedAddress + '/N', options);
+          }
+        }
+        alert('Your request has been submitted');
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        window.close();
+      }
+    </script>
+  </head>
+  <body>
+    <div class="header">
+      <h1>Claim your test credits here</h1>
+    </div>
+    <div style="display: flex; justify-content: center; padding-top: 50px;">
+      <button class="button" onclick="handleSubmit()">Request Credits</button>
+    </div>
+  </body>
+</html>

@@ -44,14 +44,14 @@ export const ChannelCard = withStyles(styles)(props => {
         <Grid item xs={12}>
           {/* <Typography style={{ color: 'white' }}> Channel </Typography> */}
           <span id="balance-channel-token">
-            <Typography style={{ display: "inline-block" }} variant="h3" className={classes.row}>
-              {"$ "}
+            <Typography style={{display: 'inline-block'}} variant="h1" className={classes.row}>
+              <span>{split(balance.channel.token.toDAI()).whole}</span>
             </Typography>
-            <Typography style={{ display: "inline-block" }} variant="h1" className={classes.row}>
-              <span>{split(balance.channel.token.toDAI(swapRate)).whole}</span>
+            <Typography style={{display: 'inline-block'}} variant="h3" className={classes.row}>
+              <span>{split(balance.channel.token.toDAI()).part}</span>
             </Typography>
-            <Typography style={{ display: "inline-block" }} variant="h3" className={classes.row}>
-              <span>{split(balance.channel.token.toDAI(swapRate)).part}</span>
+            <Typography style={{display: 'inline-block'}} variant="h5" className={classes.row}>
+              {"   CREDITS"}
             </Typography>
           </span>
           {/* <span style={{fontSize: 64}}>&nbsp;&nbsp;&nbsp;</span> */}
@@ -71,6 +71,14 @@ export const ChannelCard = withStyles(styles)(props => {
         <br />
 
         <Grid item xs={12}>
+          <span id="balance-channel-tips">
+            <Typography style={{display: 'inline-block'}} variant="h4" className={classes.row}>
+              <span>{split(balance.channel.tipToken.toTIP()).whole}</span>
+            </Typography>
+            <Typography style={{display: 'inline-block'}} variant="h5" className={classes.row}>
+              {" REWARDS"}
+            </Typography>
+          </span>
           {/* <Typography style={{ color: 'white' }}> On-Chain </Typography>
           <span id="balance-onchain-token">
             <Typography style={{display: 'inline-block'}} variant="h5" className={classes.row}>
