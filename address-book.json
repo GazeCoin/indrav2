@@ -226,9 +226,9 @@
       "txHash": "0x641fac27fb298bd31fa0c55b46f9b68f5b63a810e994d025a159b51499235d44"
     },
     "Token2": {
-      "address": "0x74e3FC764c2474f25369B9d021b7F92e8441A2Dc",
+      "address": "0x0d8cc4b8d15D4c3eF1d70af0071376fb26B5669b",
       "bytecode": "0xf97398131762b89df0289198fa30b8da8776d0afc8662aefc397a0b6b31ceb44",
-      "txHash": "0x7e00dd66397b3dc8488c794d62e5f8d61c98028edb1d84d2f4b88fe9b009313c"
+      "txHash": "0xac65c7667ea1d25323df1853082a9c77e4d85518dceba020f3d14ce69ebdf098"
     }
   }
 }
