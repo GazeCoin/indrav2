@@ -1,7 +1,8 @@
 import { Entity, PrimaryGeneratedColumn, Column, OneToOne, JoinColumn } from "typeorm";
-import { utils } from "ethers";
+import { BigNumber } from "ethers";
 
 import { Channel } from "../channel/channel.entity";
+import { transformBN } from "../utils";
 import { IsBytes32, IsEthAddress } from "../validate";
 
 @Entity()
@@ -9,17 +10,12 @@ export class SetupCommitment {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => new utils.BigNumber(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  value!: utils.BigNumber;
+  @Column("text", { transformer: transformBN })
+  value!: BigNumber;
 
   @Column("text")
   @IsEthAddress()
-  to: string;
+  to!: string;
 
   @Column("text")
   @IsBytes32()

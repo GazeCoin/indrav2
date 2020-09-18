@@ -1,4 +1,4 @@
-import { utils } from "ethers";
+import { BigNumber } from "ethers";
 import {
   Column,
   Entity,
@@ -10,44 +10,50 @@ import {
 } from "typeorm";
 
 import { Channel } from "../channel/channel.entity";
+import { transformBN } from "../utils";
 
 export enum TransactionReason {
   USER_WITHDRAWAL = "USER_WITHDRAWAL",
   COLLATERALIZATION = "COLLATERALIZATION",
   NODE_WITHDRAWAL = "NODE_WITHDRAWAL",
+  MULTISIG_DEPLOY = "MULTISIG_DEPLOY",
+  DISPUTE = "DISPUTE",
+}
+
+export enum TransactionStatus {
+  PENDING = "PENDING",
+  SUCCESS = "SUCCESS",
+  FAILED = "FAILED",
 }
 
 @Entity()
 export class OnchainTransaction {
+  // Non-onchain fields
   @PrimaryGeneratedColumn()
   id!: number;
 
   @Column("text")
   reason!: TransactionReason;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => new utils.BigNumber(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  value!: utils.BigNumber;
+  @Column("text")
+  status!: TransactionStatus;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => new utils.BigNumber(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  gasPrice!: utils.BigNumber;
+  @CreateDateColumn({ type: "timestamp" })
+  createdAt!: Date;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => new utils.BigNumber(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  gasLimit!: utils.BigNumber;
+  // should this just be a ref to user pub id?
+  @ManyToOne((type: any) => Channel, (channel: Channel) => channel.transactions)
+  channel!: Channel;
+
+  // Transaction fields assigned by `TransactionResponse` (before mined)
+  @Column("text", { transformer: transformBN })
+  value!: BigNumber;
+
+  @Column("text", { transformer: transformBN })
+  gasPrice!: BigNumber;
+
+  @Column("text", { transformer: transformBN })
+  gasLimit!: BigNumber;
 
   @Column("integer")
   nonce!: number;
@@ -58,27 +64,39 @@ export class OnchainTransaction {
   @Column("text")
   from!: string;
 
-  @Column("text")
+  @Column("text", { unique: true })
   hash!: string;
+
+  @Column("text", { nullable: true })
+  chainId!: string;
+
+  @Column("integer", { nullable: true })
+  blockNumber!: number;
+
+  @Column("text", { nullable: true })
+  blockHash!: string;
+
+  @Column("text", { nullable: true })
+  raw!: string;
 
   @Column("text")
   data!: string;
 
-  @Column("integer")
-  v!: number;
+  // Fields from TransactionReceipt (after mined)
+  @Column("text", { transformer: transformBN })
+  gasUsed!: BigNumber;
 
-  @Column("text")
-  r!: string;
+  @Column("text", { nullable: true })
+  logsBloom!: string;
 
-  @Column("text")
-  s!: string;
+  @Column("jsonb", { nullable: true })
+  errors!: { [k: number]: string };
 
-  @CreateDateColumn({ type: "timestamp" })
-  createdAt!: Date;
+  @Column("text", { nullable: true })
+  appIdentityHash!: string;
 
-  // should this just be a ref to user pub id?
-  @ManyToOne((type: any) => Channel, (channel: Channel) => channel.transactions)
-  channel!: Channel;
+  @Column("boolean", { default: false })
+  appUninstalled!: boolean;
 }
 
 @ViewEntity({
@@ -94,11 +112,14 @@ export class OnchainTransaction {
     "onchain_transaction"."hash" as "hash",
     "onchain_transaction"."data" as "data",
     "onchain_transaction"."nonce" as "nonce",
+    "onchain_transaction"."status" as "status",
+    "onchain_transaction"."gasUsed" as "gasUsed",
     encode(digest("channel"."userIdentifier", 'sha256'), 'hex') as "publicIdentifier"
   FROM "onchain_transaction"
     LEFT JOIN "channel" ON "channel"."multisigAddress" = "onchain_transaction"."channelMultisigAddress"
   `,
 })
+
 export class AnonymizedOnchainTransaction {
   @ViewColumn()
   createdAt!: Date;

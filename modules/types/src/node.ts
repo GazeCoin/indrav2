@@ -1,23 +1,30 @@
-import { Address, BigNumber, Bytes32, DecString, Network, PublicIdentifier } from "./basic";
+import { providers } from "ethers";
+
+import {
+  Address,
+  BigNumber,
+  Bytes32,
+  DecString,
+  Network,
+  PublicIdentifier,
+  TransactionResponse,
+} from "./basic";
 import {
   ConditionalTransactionCommitmentJSON,
   MinimalTransaction,
   SetStateCommitmentJSON,
 } from "./commitments";
-import { ContractAddresses } from "./contracts";
-import { MethodResults } from "./methods";
 import { PublicResults } from "./public";
 import { StateChannelJSON } from "./state";
-import {
-  LinkedTransferStatus,
-  HashLockTransferStatus,
-  SignedTransferStatus,
-  CreatedConditionalTransferMetaMap,
-  ConditionalTransferTypes,
-} from "./transfers";
-import { Collateralizations, RebalanceProfile } from "./misc";
+import { LinkedTransferStatus, HashLockTransferStatus, SignedTransferStatus } from "./transfers";
+import { RebalanceProfile } from "./misc";
+import { ContractAddresses } from "./contracts";
 
 type GetRebalanceProfileResponse = RebalanceProfile;
+
+export type ContractAddressBook = {
+  [chainId: string]: ContractAddresses;
+};
 
 type GetHashLockTransferResponse =
   | {
@@ -30,6 +37,8 @@ type GetHashLockTransferResponse =
       meta?: any;
       preImage: Bytes32;
       expiry: BigNumber;
+      senderAppIdentityHash?: Bytes32;
+      receiverAppIdentityHash?: Bytes32;
     }
   | undefined;
 
@@ -54,10 +63,11 @@ type GetTransferResponse = {
 
 type GetConfigResponse = {
   ethNetwork: Network;
-  contractAddresses: ContractAddresses;
+  contractAddresses: ContractAddressBook;
   nodeIdentifier: PublicIdentifier;
   messagingUrl: string[];
-  supportedTokenAddresses: Address[];
+  signerAddress: Address;
+  supportedTokenAddresses: { [chainId: number]: Address[] };
 };
 
 type GetChannelResponse = {
@@ -65,7 +75,6 @@ type GetChannelResponse = {
   userIdentifier: PublicIdentifier;
   multisigAddress: Address;
   available: boolean;
-  activeCollateralizations: Collateralizations;
 };
 
 // returns the transaction hash of the multisig deployment
@@ -74,7 +83,9 @@ type CreateChannelResponse = {
   transactionHash: Bytes32;
 };
 
-type RequestCollateralResponse = MethodResults.Deposit | undefined;
+type RequestCollateralResponse =
+  | { transaction: providers.TransactionResponse; depositAppIdentityHash: string }
+  | undefined;
 
 // returned by the node when client calls channel.restore
 type ChannelRestoreResponse = {
@@ -99,6 +110,8 @@ type FetchedLinkedTransfer = {
 type GetLinkedTransferResponse = FetchedLinkedTransfer;
 type GetPendingAsyncTransfersResponse = FetchedLinkedTransfer[];
 
+type CancelChallengeResponse = TransactionResponse;
+
 ////////////////////////////////////
 // exports
 
@@ -118,4 +131,5 @@ export namespace NodeResponses {
   export type CreateChannel = CreateChannelResponse;
   export type RequestCollateral = RequestCollateralResponse;
   export type ChannelRestore = ChannelRestoreResponse;
+  export type CancelChallenge = CancelChallengeResponse;
 }

@@ -1,10 +1,10 @@
+// SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.6.4;
 pragma experimental "ABIEncoderV2";
 
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "../adjudicator/interfaces/CounterfactualApp.sol";
 import "../funding/libs/LibOutcome.sol";
-
 
 /// @title Simple Linked Transfer App
 /// @notice This contract allows users to claim a payment locked in
@@ -31,9 +31,19 @@ contract SimpleLinkedTransferApp is CounterfactualApp {
   {
     AppState memory state = abi.decode(encodedState, (AppState));
     Action memory action = abi.decode(encodedAction, (Action));
-    bytes32 generatedHash = sha256(abi.encode(action.preImage));
 
     require(!state.finalized, "Cannot take action on finalized state");
+
+    // Handle cancellation
+    if (action.preImage == bytes32(0)) {
+      state.preImage = action.preImage;
+      state.finalized = true;
+
+      return abi.encode(state);
+    }
+
+    // Handle payment
+    bytes32 generatedHash = sha256(abi.encode(action.preImage));
     require(
       state.linkedHash == generatedHash,
       "Hash generated from preimage does not match hash in state"

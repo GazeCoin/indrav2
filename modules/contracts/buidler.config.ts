@@ -1,6 +1,6 @@
 import { BuidlerConfig } from "@nomiclabs/buidler/config";
 import { usePlugin } from "@nomiclabs/buidler/config";
-import { utils } from "ethers";
+import { BigNumber } from "ethers";
 
 import * as packageJson from "./package.json";
 
@@ -9,7 +9,7 @@ import * as packageJson from "./package.json";
 
 // create accounts with the default balance of MAX_INT / 2
 // and use them to fund accounts in the test as needed
-const MAX_INT = new utils.BigNumber(2).pow(256).sub(1);
+const MAX_INT = BigNumber.from(2).pow(256).sub(1);
 
 usePlugin("@nomiclabs/buidler-waffle");
 
@@ -25,10 +25,11 @@ const config: BuidlerConfig = {
   defaultNetwork: "buidlerevm",
   networks: {
     ganache: {
-      chainId: 4447,
+      chainId: 1337,
       url: "http://localhost:8545",
     },
     buidlerevm: {
+      chainId: 1338,
       loggingEnabled: false,
       accounts: [
         {
@@ -54,6 +55,11 @@ const config: BuidlerConfig = {
         {
           // 0x691F096377eD5C63e3f43b0903EFd7a34CcC23Bf
           privateKey: "0x20a88167e85946376ba44cf26f347c2f6d3d4f6e3302bda1990355d267c22051",
+          balance: MAX_INT.div(2).toString(),
+        },
+        {
+          // 0x627306090abaB3A6e1400e9345bC60c78a8BEf57 // SUGAR DADDY
+          privateKey: "0xc87509a1c067bbde78beb793e6fa76530b6382a4c0241e5e4a9ec0a0f44dc0d3",
           balance: MAX_INT.div(2).toString(),
         },
       ],

@@ -3,8 +3,8 @@ import {
   JsonRpcProvider,
   ChallengeUpdatedEventPayload,
   ChallengeStatus,
-  NetworkContext,
   StateProgressedEventPayload,
+  ContractAddresses,
 } from "@connext/types";
 import { ChannelSigner, ColorfulLogger, computeAppChallengeHash, toBN } from "@connext/utils";
 import { beforeEach } from "mocha";
@@ -15,16 +15,21 @@ import { ChainListener } from "../src";
 
 const { Zero, One } = constants;
 
+const logger = new ColorfulLogger(
+  "ChainListenerTest",
+  parseInt(process.env.LOG_LEVEL || "0", 10),
+  true,
+  "T",
+);
+
 describe("ChainListener", () => {
   let challengeRegistry: Contract;
-  let provider: JsonRpcProvider;
+  let providers: { [chainId: number]: JsonRpcProvider };
   let chainListener: ChainListener;
   let setAndProgressState: any;
   let appInstance: AppWithCounterClass;
   let signers: ChannelSigner[];
-
-  const logLevel = parseInt(process.env.LOG_LEVEL || "0");
-  const log = new ColorfulLogger("TestChainListener", logLevel, true, "T");
+  let chainId: number;
 
   const action = {
     actionType: ActionType.SUBMIT_COUNTER_INCREMENT,
@@ -73,20 +78,21 @@ describe("ChainListener", () => {
   beforeEach(async () => {
     const context = await setupContext(false, [{ defaultTimeout: timeout }]);
     challengeRegistry = context["challengeRegistry"];
-    provider = context["provider"];
+    providers = context["providers"];
     setAndProgressState = context["setAndProgressState"];
     appInstance = context["activeApps"][0];
     signers = context["signers"];
+    chainId = parseInt(Object.keys(providers)[0]);
 
     chainListener = new ChainListener(
-      provider,
-      { ChallengeRegistry: challengeRegistry.address } as NetworkContext,
-      new ColorfulLogger("Test", logLevel, true, " "),
+      providers,
+      { [chainId]: { ChallengeRegistry: challengeRegistry.address } as ContractAddresses },
+      logger,
     );
   });
 
   afterEach(() => {
-    chainListener.removeAllListeners();
+    chainListener.detach();
   });
 
   it("should parse ChallengeUpdated + StateProgressed events properly when enabled", async () => {
@@ -96,7 +102,7 @@ describe("ChainListener", () => {
     // trigger `ChallengeUpdated` event
     const [states, progressed, tx] = await Promise.all([
       new Promise(async (resolve) => {
-        chainListener.on("ChallengeUpdated", async (data: ChallengeUpdatedEventPayload) => {
+        chainListener.attach("ChallengeUpdated", async (data: ChallengeUpdatedEventPayload) => {
           statesUpdated.push(data);
           if (statesUpdated.length >= 2) {
             return resolve(
@@ -105,11 +111,7 @@ describe("ChainListener", () => {
           }
         });
       }),
-      new Promise(async (resolve) => {
-        chainListener.once("StateProgressed", async (data: StateProgressedEventPayload) => {
-          return resolve(data);
-        });
-      }),
+      chainListener.waitFor("StateProgressed", 30_000),
       setAndProgressState(action),
     ]);
     ////// verification
@@ -132,11 +134,11 @@ describe("ChainListener", () => {
 
     // track any emitted events
     let emitted = 0;
-    chainListener.on("ChallengeUpdated", () => {
+    chainListener.attach("ChallengeUpdated", () => {
       emitted += 1;
       return Promise.resolve();
     });
-    chainListener.on("StateProgressed", () => {
+    chainListener.attach("StateProgressed", () => {
       emitted += 1;
       return Promise.resolve();
     });
@@ -151,26 +153,26 @@ describe("ChainListener", () => {
     await chainListener.disable();
 
     // submit transaction
-    const startingBlock = await provider.getBlockNumber();
-    log.debug(`parsing past logs staring from block: ${startingBlock}`);
+    const startingBlock = await providers[chainId].getBlockNumber();
+    logger.debug(`parsing past logs staring from block: ${startingBlock}`);
     const tx = await setAndProgressState(action);
     expect(tx).to.be.ok;
 
     // wait for block number to increase
     await new Promise((resolve) =>
-      provider.on("block", (block: number) => {
+      providers[chainId].on("block", (block: number) => {
         if (startingBlock < block) {
           return resolve();
         }
       }),
     );
-    expect(startingBlock).to.be.lessThan(await provider.getBlockNumber());
+    expect(startingBlock).to.be.lessThan(await providers[chainId].getBlockNumber());
 
     // parse logs
     const statesUpdated: ChallengeUpdatedEventPayload[] = [];
     const [states, progressed] = await Promise.all([
       new Promise(async (resolve) => {
-        chainListener.on("ChallengeUpdated", async (data: ChallengeUpdatedEventPayload) => {
+        chainListener.attach("ChallengeUpdated", async (data: ChallengeUpdatedEventPayload) => {
           statesUpdated.push(data);
           if (statesUpdated.length >= 2) {
             return resolve(
@@ -179,11 +181,7 @@ describe("ChainListener", () => {
           }
         });
       }),
-      new Promise(async (resolve) => {
-        chainListener.once("StateProgressed", async (data: StateProgressedEventPayload) => {
-          return resolve(data);
-        });
-      }),
+      chainListener.waitFor("StateProgressed", 30_000),
       chainListener.parseLogsFrom(startingBlock),
     ]);
 

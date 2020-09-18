@@ -1,5 +1,5 @@
 import { AppRegistry } from "./app";
-import { providers } from "ethers";
+import { providers, BigNumberish } from "ethers";
 
 import {
   Address,
@@ -17,17 +17,22 @@ import { IMessagingService } from "./messaging";
 import { ILoggerService } from "./logger";
 import { IStoreService } from "./store";
 import { ConditionalTransferTypes } from "./transfers";
+import { MiddlewareMap } from "./middleware";
 
 export interface AsyncNodeInitializationParameters extends NodeInitializationParameters {
   ethProvider: providers.JsonRpcProvider;
+  chainId: number;
   messaging: IMessagingService;
   messagingUrl?: string;
   store?: IStoreService;
   signer?: IChannelSigner;
   channelProvider?: IChannelProvider;
+  middlewareMap?: MiddlewareMap;
+  skipSync?: boolean;
 }
 
 export interface NodeInitializationParameters {
+  chainId: number;
   nodeUrl: string;
   messaging: IMessagingService;
   logger?: ILoggerService;
@@ -38,6 +43,7 @@ export interface NodeInitializationParameters {
 
 export interface INodeApiClient {
   nodeUrl: UrlString;
+  chainId: number;
   messaging: IMessagingService;
   latestSwapRates: StringMapping;
   log: ILoggerService;
@@ -65,7 +71,6 @@ export interface INodeApiClient {
     lockHash: Bytes32,
     assetId?: Address,
   ): Promise<NodeResponses.GetHashLockTransfer>;
-  getPendingAsyncTransfers(): Promise<NodeResponses.GetPendingAsyncTransfers>;
   installPendingTransfers(): Promise<NodeResponses.GetPendingAsyncTransfers>;
   getTransferHistory(userAddress?: Address): Promise<NodeResponses.GetTransferHistory>;
   getLatestWithdrawal(): Promise<Transaction>;
@@ -73,13 +78,20 @@ export interface INodeApiClient {
     paymentId: string,
     conditionType: ConditionalTransferTypes,
   ): Promise<NodeResponses.InstallConditionalTransferReceiverApp>;
-  requestCollateral(assetId: Address): Promise<NodeResponses.RequestCollateral | void>;
+  requestCollateral(
+    assetId: Address,
+    amount?: BigNumberish,
+  ): Promise<NodeResponses.RequestCollateral>;
   fetchLinkedTransfer(paymentId: Bytes32): Promise<NodeResponses.GetLinkedTransfer>;
   fetchSignedTransfer(paymentId: Bytes32): Promise<NodeResponses.GetSignedTransfer>;
+  fetchGraphTransfer(paymentId: Bytes32): Promise<NodeResponses.GetSignedTransfer>;
   resolveLinkedTransfer(paymentId: Bytes32): Promise<NodeResponses.ResolveLinkedTransfer>;
   resolveSignedTransfer(paymentId: Bytes32): Promise<NodeResponses.ResolveSignedTransfer>;
-  recipientOnline(recipientAddress: Address): Promise<boolean>;
   restoreState(userAddress: Address): Promise<NodeResponses.ChannelRestore>;
   subscribeToSwapRates(from: Address, to: Address, callback: any): Promise<void>;
   unsubscribeFromSwapRates(from: Address, to: Address): Promise<void>;
+  cancelChallenge(
+    appIdentityHash: string,
+    signature: string,
+  ): Promise<NodeResponses.CancelChallenge>;
 }

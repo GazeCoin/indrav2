@@ -2,7 +2,6 @@
 import { Injectable } from "@nestjs/common";
 import { TypeOrmModuleOptions, TypeOrmOptionsFactory } from "@nestjs/typeorm";
 
-import { AppRegistry } from "../appRegistry/appRegistry.entity";
 import { CFCoreRecord } from "../cfCore/cfCore.entity";
 import { Channel } from "../channel/channel.entity";
 import { ConfigService } from "../config/config.service";
@@ -20,6 +19,7 @@ import { WithdrawCommitment } from "../withdrawCommitment/withdrawCommitment.ent
 import { Challenge, ProcessedBlock } from "../challenge/challenge.entity";
 import { StateProgressedEvent } from "../stateProgressedEvent/stateProgressedEvent.entity";
 import { ChallengeUpdatedEvent } from "../challengeUpdatedEvent/challengeUpdatedEvent.entity";
+import { Transfer } from "../transfer/transfer.entity";
 
 // Import Migrations
 import { InitNodeRecords1567158660577 } from "../../migrations/1567158660577-init-node-records";
@@ -53,10 +53,28 @@ import { addLatestAction1587492602160 } from "../../migrations/1587492602160-add
 import { initWatcherMethods1587505874044 } from "../../migrations/1587505874044-init-watcher-methods";
 import { changePrimaryKeys1588583967151 } from "../../migrations/1588583967151-change-primary-keys";
 import { rebalanceTargets1589792004077 } from "../../migrations/1589792004077-rebalance-targets";
+import { removeAppProposal1591359031983 } from "../../migrations/1591359031983-remove-app-proposal";
+import { appIdentityHashPrimaryCommitmentKeys1591979802157 } from "../../migrations/1591979802157-app-identity-hash-primary-commitment-keys";
+import { dropIdentifiers1592148854323 } from "../../migrations/1592148854323-drop-identifiers";
+import { storedProcedureCreateAppProposal1592290983473 } from "../../migrations/1592290983473-stored-procedure-create-app-proposal";
+import { storedProcedureCreateAppInstance1592291092044 } from "../../migrations/1592291092044-stored-procedure-create-app-instance";
+import { storedProcedureUpdateAppInstance1592309341833 } from "../../migrations/1592309341833-stored-procedure-update-app-instance";
+import { storedProcedureRemoveAppInstance1592310334011 } from "../../migrations/1592310334011-stored-procedure-remove-app-instance";
+import { pendingTransactions1593637047546 } from "../../migrations/1593637047546-pending-transactions";
+import { addChainId1593805719084 } from "../../migrations/1593805719084-add-chain-id";
+import { txDataToCommitments1594196149518 } from "../../migrations/1594196149518-tx-data-to-commitments";
+import { txDataStoredProcedures1594196572552 } from "../../migrations/1594196572552-tx-data-stored-procedures";
+import { removeWithUpdatedState1594324129179 } from "../../migrations/1594324129179-remove-with-updated-state";
+import { conditionalTxJson1594978485558 } from "../../migrations/1594978485558-conditional-tx-json";
+import { updateOnchain1594840136529 } from "../../migrations/1594840136529-update-onchain";
+import { removeAppCommitments1595210814094 } from "../../migrations/1595210814094-remove-app-commitments";
+import { updateTxEnum1595439120210 } from "../../migrations/1595439120210-update-tx-enum";
+import { addAppIdTx1596488084652 } from "../../migrations/1596488084652-add-app-id-tx";
+import { transactionAppFlag1596924706697 } from "../../migrations/1596924706697-transaction-app-flag";
+import { initTransferTable1598039003043 } from "../../migrations/1598039003043-initTransferTable";
 
 export const entities = [
   AppInstance,
-  AppRegistry,
   Channel,
   CFCoreRecord,
   RebalanceProfile,
@@ -65,12 +83,14 @@ export const entities = [
   ConditionalTransactionCommitment,
   SetStateCommitment,
   SetupCommitment,
+  Transfer,
   Withdraw,
   WithdrawCommitment,
   Challenge,
   ProcessedBlock,
   StateProgressedEvent,
   ChallengeUpdatedEvent,
+  Transfer,
 ];
 
 export const migrations = [
@@ -105,20 +125,52 @@ export const migrations = [
   initWatcherMethods1587505874044,
   changePrimaryKeys1588583967151,
   rebalanceTargets1589792004077,
+  removeAppProposal1591359031983,
+  appIdentityHashPrimaryCommitmentKeys1591979802157,
+  dropIdentifiers1592148854323,
+  storedProcedureCreateAppProposal1592290983473,
+  storedProcedureCreateAppInstance1592291092044,
+  storedProcedureUpdateAppInstance1592309341833,
+  storedProcedureRemoveAppInstance1592310334011,
+  pendingTransactions1593637047546,
+  addChainId1593805719084,
+  txDataToCommitments1594196149518,
+  txDataStoredProcedures1594196572552,
+  removeWithUpdatedState1594324129179,
+  conditionalTxJson1594978485558,
+  updateOnchain1594840136529,
+  removeAppCommitments1595210814094,
+  updateTxEnum1595439120210,
+  addAppIdTx1596488084652,
+  transactionAppFlag1596924706697,
+  initTransferTable1598039003043,
 ];
 
 @Injectable()
 export class TypeOrmConfigService implements TypeOrmOptionsFactory {
   constructor(private readonly config: ConfigService) {}
   createTypeOrmOptions(): TypeOrmModuleOptions {
+    const redisUrl = this.config.getRedisUrl().replace("redis://", "");
+    const hostPort = redisUrl.split(":");
+    if (hostPort.length !== 2) {
+      throw new Error("Invalid redis URL.");
+    }
+
     return {
-      ...this.config.getPostgresConfig(),
+      cache: {
+        type: "ioredis",
+        options: {
+          host: hostPort[0],
+          port: Number(hostPort[1]),
+        },
+      },
       entities,
-      logging: ["error"],
+      logging: ["warn", "error"],
       migrations,
       migrationsRun: true,
       synchronize: false,
       type: "postgres",
+      ...this.config.getPostgresConfig(),
     };
   }
 }

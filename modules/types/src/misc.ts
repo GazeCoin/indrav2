@@ -1,7 +1,6 @@
-import { Address, BigNumber, Bytes32, PublicIdentifier } from "./basic";
+import { Address, BigNumber, Bytes32, PublicIdentifier, TransactionResponse } from "./basic";
 import { enumify } from "./utils";
-
-export type Collateralizations = { [assetId: string]: boolean };
+import { MinimalTransaction } from "./commitments";
 
 export type RebalanceProfile = {
   assetId: Address;
@@ -22,30 +21,33 @@ export type ChannelAppSequences = {
   nodeSequenceNumber: number;
 };
 
-interface PendingAsyncTransfer {
-  assetId: Address;
-  amount: BigNumber;
-  encryptedPreImage: string;
-  linkedHash: Bytes32;
-  paymentId: Bytes32;
-}
-
 ////////////////////////////////////
 // Swap Rate Management
-
-export type AllowedSwap = {
-  from: Address;
-  to: Address;
-};
 
 export const PriceOracleTypes = enumify({
   UNISWAP: "UNISWAP",
   HARDCODED: "HARDCODED",
+  ACCEPT_CLIENT_RATE: "ACCEPT_CLIENT_RATE",
 });
 export type PriceOracleTypes = typeof PriceOracleTypes[keyof typeof PriceOracleTypes];
 
+export type AllowedSwap = {
+  from: Address;
+  to: Address;
+  fromChainId: number;
+  toChainId: number;
+  priceOracleType: PriceOracleTypes;
+};
+
 export type SwapRate = AllowedSwap & {
   rate: string; // DecString?
-  priceOracleType: PriceOracleTypes;
   blockNumber?: number;
 };
+
+export interface IOnchainTransactionService {
+  sendTransaction(
+    transaction: MinimalTransaction,
+    chainId: number,
+    multisigAddress?: string,
+  ): Promise<TransactionResponse>;
+}

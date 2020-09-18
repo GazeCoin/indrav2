@@ -1,5 +1,5 @@
 import { connect } from "@connext/client";
-import { getLocalStore, getMemoryStore } from "@connext/store";
+import { getMemoryStore } from "@connext/store";
 import {
   ClientOptions,
   IChannelProvider,
@@ -15,79 +15,85 @@ import {
   ChannelSigner,
   ColorfulLogger,
   getRandomPrivateKey,
+  getRandomBytes32,
 } from "@connext/utils";
 import { expect } from "chai";
 import { Contract, Wallet } from "ethers";
 
 import { ETH_AMOUNT_LG, TOKEN_AMOUNT } from "./constants";
 import { env } from "./env";
-import { ethWallet } from "./ethprovider";
+import { ethProviderUrl, ethWallet } from "./ethprovider";
+import { getTestLoggers } from "./misc";
 import { TestMessagingService, SendReceiveCounter, RECEIVED, SEND, NO_LIMIT } from "./messaging";
 
+const { log, timeElapsed } = getTestLoggers("ClientHelper");
+
 export const createClient = async (
-  opts: Partial<ClientOptions & { id: string; logLevel: number }> = {},
+  opts: Partial<ClientOptions & { id: string }> = {},
   fund: boolean = true,
 ): Promise<IConnextClient> => {
-  const store = opts.store || getMemoryStore();
-  const log = new ColorfulLogger("CreateClient", opts.logLevel || env.logLevel);
-  const clientOpts: ClientOptions = {
-    ethProviderUrl: env.ethProviderUrl,
-    loggerService: new ColorfulLogger("Client", opts.logLevel || env.logLevel, true, opts.id),
-    signer: opts.signer || getRandomPrivateKey(),
-    nodeUrl: env.nodeUrl,
-    store,
+  const start = Date.now();
+  const store = opts.store || getMemoryStore({ prefix: getRandomBytes32() });
+  await store.init();
+  const client = await connect({
     ...opts,
-  };
-  log.info(`connect() called`);
-  let start = Date.now();
-  const client = await connect(clientOpts);
-  log.info(`connect() returned after ${Date.now() - start}ms`);
-  start = Date.now();
+    ethProviderUrl: opts.ethProviderUrl || ethProviderUrl,
+    loggerService: new ColorfulLogger("Client", env.clientLogLevel, true, opts.id),
+    signer: opts.signer || getRandomPrivateKey(),
+    nodeUrl: opts.nodeUrl || env.nodeUrl,
+    messagingUrl: opts.messagingUrl || env.natsUrl,
+    store,
+  });
+
   if (fund) {
-    log.info(`sending client eth`);
-    const ethTx = await ethWallet.sendTransaction({
-      to: client.signerAddress,
-      value: ETH_AMOUNT_LG,
-    });
-    log.debug(`transaction sent ${ethTx.hash}, waiting...`);
-    await ethTx.wait();
-    const token = new Contract(client.config.contractAddresses.Token!, ERC20.abi, ethWallet);
-    log.info(`sending client tokens`);
-    const tokenTx = await token.functions.transfer(client.signerAddress, TOKEN_AMOUNT);
-    log.debug(`transaction sent ${tokenTx.hash}, waiting...`);
-    await tokenTx.wait();
+    const tokenAddress = client.config.contractAddresses[client.chainId].Token!;
+    const token = new Contract(tokenAddress, ERC20.abi, ethWallet);
+    const [ethTx, tokenTx] = await Promise.all([
+      await ethWallet.sendTransaction({
+        to: client.signerAddress,
+        value: ETH_AMOUNT_LG,
+      }),
+      await token.transfer(client.signerAddress, TOKEN_AMOUNT),
+    ]);
+    log.debug(
+      `Sent ${tokenAddress} tokens on chain ${client.chainId} from funding account ${
+        ethWallet.address
+      } with balance ${await token.balanceOf(ethWallet.address)} via tx ${tokenTx.hash}`,
+    );
+    await Promise.all([ethTx.wait(), tokenTx.wait()]);
   }
+
   expect(client.signerAddress).to.be.ok;
   expect(client.publicIdentifier).to.be.ok;
   expect(client.multisigAddress).to.be.ok;
+  timeElapsed(`Created client ${client.publicIdentifier}`, start);
   return client;
 };
 
 export const createRemoteClient = async (
   channelProvider: IChannelProvider,
 ): Promise<IConnextClient> => {
-  const clientOpts: ClientOptions = {
+  const client = await connect({
     channelProvider,
-    ethProviderUrl: env.ethProviderUrl,
-    loggerService: new ColorfulLogger("TestRunner", env.logLevel, true),
-  };
-  const client = await connect(clientOpts);
+    ethProviderUrl: ethProviderUrl,
+    loggerService: new ColorfulLogger("TestRunner", env.clientLogLevel, true),
+    messagingUrl: env.natsUrl,
+  });
   expect(client.signerAddress).to.be.ok;
   expect(client.publicIdentifier).to.be.ok;
   return client;
 };
 
 export const createDefaultClient = async (network: string, opts?: Partial<ClientOptions>) => {
-  // TODO: allow test-runner to access external urls
   const urlOptions = {
-    ethProviderUrl: env.ethProviderUrl,
+    ethProviderUrl: ethProviderUrl,
     nodeUrl: env.nodeUrl,
+    messagingUrl: env.natsUrl,
   };
   let clientOpts: Partial<ClientOptions> = {
     ...opts,
     ...urlOptions,
-    loggerService: new ColorfulLogger("TestRunner", env.logLevel, true),
-    store: getLocalStore(), // TODO: replace with polyfilled window.localStorage
+    loggerService: new ColorfulLogger("TestRunner", env.clientLogLevel, true),
   };
   if (network === "mainnet") {
     clientOpts = {
@@ -107,13 +113,14 @@ export type ClientTestMessagingInputOpts = {
   signer: IChannelSigner;
   params: Partial<ProtocolParam>;
   store?: IStoreService;
+  stopOnCeilingReached?: boolean;
 };
 
 export const createClientWithMessagingLimits = async (
-  opts: Partial<ClientTestMessagingInputOpts> = {},
+  opts: Partial<ClientTestMessagingInputOpts> & { id?: string } = {},
 ): Promise<IConnextClient> => {
-  const { protocol, ceiling, signer: signerOpts, params } = opts;
-  const signer = signerOpts || getRandomChannelSigner(env.ethProviderUrl);
+  const { protocol, ceiling, params } = opts;
+  const signer = opts.signer || getRandomChannelSigner(ethProviderUrl);
   // no defaults specified, exit early
   if (Object.keys(opts).length === 0) {
     const messaging = new TestMessagingService({ signer: signer as ChannelSigner });
@@ -142,7 +149,11 @@ export const createClientWithMessagingLimits = async (
       },
     };
   }
-  const messaging = new TestMessagingService({ ...messageOptions, signer });
+  const messaging = new TestMessagingService({
+    ...messageOptions,
+    signer,
+    stopOnCeilingReached: opts.stopOnCeilingReached,
+  });
   // verification of messaging settings
   const expectedCount = {
     [SEND]: 0,
@@ -161,5 +172,10 @@ export const createClientWithMessagingLimits = async (
         params,
       });
   expect(messaging.providedOptions).to.containSubset(messageOptions);
-  return createClient({ messaging, signer: signer });
+  return createClient({
+    messaging,
+    signer: signer,
+    store: opts.store,
+    id: opts.id,
+  });
 };

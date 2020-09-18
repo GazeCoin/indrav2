@@ -1,5 +1,5 @@
-import { getLocalStore } from "@connext/store";
-import { ConditionalTransferTypes, IConnextClient } from "@connext/types";
+import { getMemoryStore } from "@connext/store";
+import { ConditionalTransferTypes, IConnextClient, EventNames } from "@connext/types";
 import {
   getRandomBytes32,
   getRandomPrivateKey,
@@ -11,7 +11,6 @@ import { ContractFactory, Wallet, constants } from "ethers";
 import tokenArtifacts from "@openzeppelin/contracts/build/contracts/ERC20Mintable.json";
 
 import {
-  AssetOptions,
   asyncTransferAsset,
   createClient,
   ETH_AMOUNT_LG,
@@ -21,61 +20,64 @@ import {
   expect,
   fundChannel,
   FUNDED_MNEMONICS,
-  TOKEN_AMOUNT,
+  getTestLoggers,
   requestCollateral,
+  TOKEN_AMOUNT,
   withdrawFromChannel,
   ZERO_ZERO_ONE_ETH,
 } from "../util";
 
 const { AddressZero } = constants;
 
-describe("Async Transfers", () => {
+const name = "Async Transfers";
+const { log, timeElapsed } = getTestLoggers(name);
+describe(name, () => {
   let clientA: IConnextClient;
   let clientB: IConnextClient;
+  let start: number;
   let tokenAddress: string;
 
   beforeEach(async () => {
+    start = Date.now();
     clientA = await createClient({ id: "A" });
     clientB = await createClient({ id: "B" });
-    tokenAddress = clientA.config.contractAddresses.Token!;
+    tokenAddress = clientA.config.contractAddresses[clientA.chainId].Token!;
+    timeElapsed("beforeEach complete", start);
   });
 
   afterEach(async () => {
-    await clientA.messaging.disconnect();
-    await clientB.messaging.disconnect();
+    await clientA.off();
+    await clientB.off();
   });
 
-  it("happy case: client A transfers eth to client B through node", async () => {
-    const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
+  it("client A transfers eth to client B through node", async () => {
+    const transfer = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
     await fundChannel(clientA, transfer.amount, transfer.assetId);
     await requestCollateral(clientB, transfer.assetId);
     await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
   });
 
-  it("happy case: client A transfers eth to client B through node with localstorage", async () => {
-    const localStorageClient = await createClient({ store: getLocalStore() });
-    const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
-    await fundChannel(localStorageClient, transfer.amount, transfer.assetId);
-    await requestCollateral(clientB, transfer.assetId);
-    await asyncTransferAsset(localStorageClient, clientB, transfer.amount, transfer.assetId);
-  });
-
-  it("happy case: client A transfers tokens to client B through node", async () => {
-    const transfer: AssetOptions = { amount: TOKEN_AMOUNT, assetId: tokenAddress };
+  it("should transfer tokens to online peer (case-insensitive assetId)", async () => {
+    const transfer = { amount: TOKEN_AMOUNT, assetId: tokenAddress.toUpperCase() };
     await fundChannel(clientA, transfer.amount, transfer.assetId);
     await clientB.requestCollateral(transfer.assetId);
     await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
   });
 
-  it("happy case: client A transfers eth to offline client through node", async () => {
-    const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
+  it("client A transfers eth to offline client through node", async () => {
+    const transfer = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
     await fundChannel(clientA, transfer.amount, transfer.assetId);
 
     const receiverPk = getRandomPrivateKey();
-    let receiver = await createClient({ id: "C", signer: receiverPk });
+    const recevierStore = getMemoryStore();
+    let receiver = await createClient({
+      id: "C-initial",
+      signer: receiverPk,
+      store: recevierStore,
+    });
     await requestCollateral(receiver, transfer.assetId);
-    await receiver.messaging.disconnect();
-    receiver.off();
+    await receiver.off();
+
     const paymentId = getRandomBytes32();
     await clientA.transfer({
       amount: transfer.amount.toString(),
@@ -83,8 +85,14 @@ describe("Async Transfers", () => {
       recipient: receiver.publicIdentifier,
       paymentId,
     });
-    receiver = await createClient({ id: "C", signer: receiverPk });
-    await delay(5000);
+    // transfer returns on the sender side when the sender app is installed only
+    await delay(30_000);
+    const senderUnlock = clientA.waitFor(EventNames.CONDITIONAL_TRANSFER_UNLOCKED_EVENT, 30000);
+    receiver = await createClient(
+      { id: "C-recreated", signer: receiverPk, store: recevierStore },
+      false,
+    );
+    await senderUnlock;
 
     const { [receiver.signerAddress]: receiverFreeBalance } = await receiver.getFreeBalance(
       transfer.assetId,
@@ -92,7 +100,7 @@ describe("Async Transfers", () => {
     expect(receiverFreeBalance).to.eq(transfer.amount);
   });
 
-  it("happy case: client A successfully transfers to an address that doesn’t have a channel", async () => {
+  it("client A successfully transfers to an address that doesn’t have a channel", async () => {
     const receiverPk = getRandomPrivateKey();
     const receiverIdentifier = getPublicIdentifierFromPublicKey(
       getPublicKeyFromPrivateKey(receiverPk),
@@ -108,11 +116,11 @@ describe("Async Transfers", () => {
     expect(receiverClient.publicIdentifier).to.eq(receiverIdentifier);
     const freeBalance = await receiverClient.getFreeBalance(tokenAddress);
     expect(freeBalance[receiverClient.signerAddress]).to.be.above(0);
-    receiverClient.messaging.disconnect();
+    await receiverClient.off();
   });
 
   it.skip("latency test: deposit, collateralize, many transfers, withdraw", async () => {
-    const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
+    const transfer = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
     await fundChannel(clientA, ETH_AMOUNT_MD, transfer.assetId);
     await requestCollateral(clientB, transfer.assetId);
     await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
@@ -124,7 +132,7 @@ describe("Async Transfers", () => {
     /*
       // @ts-ignore
       this.timeout(1200000);
-      const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
+      const transfer = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
       await fundChannel(clientA, transfer.amount, transfer.assetId);
       await requestCollateral(clientB, transfer.assetId);
       let startTime: number[] = [];
@@ -154,7 +162,7 @@ describe("Async Transfers", () => {
   });
 
   it("client A transfers eth to client B without collateralizing", async () => {
-    const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
+    const transfer = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
     await fundChannel(clientA, transfer.amount, transfer.assetId);
 
     const receiverBal = await clientB.getFreeBalance(transfer.assetId);
@@ -164,7 +172,7 @@ describe("Async Transfers", () => {
   });
 
   it("client A transfers tokens to client B without collateralizing", async () => {
-    const transfer: AssetOptions = { amount: TOKEN_AMOUNT, assetId: tokenAddress };
+    const transfer = { amount: TOKEN_AMOUNT, assetId: tokenAddress };
     await fundChannel(clientA, transfer.amount, transfer.assetId);
 
     await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
@@ -285,23 +293,23 @@ describe("Async Transfers", () => {
         preImage,
         recipient: clientB.publicIdentifier,
       }),
-    ).to.be.rejectedWith(`invalid hexidecimal string`);
+    ).to.be.rejectedWith(`invalid arrayify value`);
   });
 
   it("Experimental: Average latency of 10 async transfers with Eth", async () => {
     const runTime: number[] = [];
     let sum = 0;
     const numberOfRuns = 5;
-    const transfer: AssetOptions = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
+    const transfer = { amount: ETH_AMOUNT_SM, assetId: AddressZero };
     await fundChannel(clientA, transfer.amount.mul(25), transfer.assetId);
     await requestCollateral(clientB, transfer.assetId);
     for (let i = 0; i < numberOfRuns; i++) {
       const start = Date.now();
       await asyncTransferAsset(clientA, clientB, transfer.amount, transfer.assetId);
       runTime[i] = Date.now() - start;
-      console.log(`Run: ${i}, Runtime: ${runTime[i]}`);
+      log.info(`Run: ${i}, Runtime: ${runTime[i]}`);
       sum = sum + runTime[i];
     }
-    console.log(`Average = ${sum / numberOfRuns} ms`);
+    log.info(`Average = ${sum / numberOfRuns} ms`);
   });
 });

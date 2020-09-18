@@ -1,6 +1,5 @@
 import {
   AppInstanceJson,
-  AppInstanceProposal,
   ChallengeStatus,
   ChallengeUpdatedEventPayload,
   ConditionalTransactionCommitmentJSON,
@@ -12,6 +11,8 @@ import {
   StateProgressedEventPayload,
   StoredAppChallenge,
   StoredAppChallengeStatus,
+  SingleAssetTwoPartyCoinTransferInterpreterParamsJson,
+  StateSchemaVersion,
 } from "@connext/types";
 import {
   deBigNumberifyJson,
@@ -19,61 +20,45 @@ import {
   getRandomBytes32,
   getRandomIdentifier,
   getRandomSignature,
-  toBN,
+  toBNJson,
 } from "@connext/utils";
-import { constants } from "ethers";
+import { constants, utils } from "ethers";
+
+import { CFCoreStore } from "../../cfCore/cfCore.store";
+
+import { env } from "./config";
 
 const { AddressZero, HashZero, Zero, One } = constants;
+const { defaultAbiCoder } = utils;
 
 export const createAppInstanceJson = (
   overrides: Partial<AppInstanceJson> = {},
 ): AppInstanceJson => {
   return {
-    appInterface: {
-      actionEncoding: null,
-      addr: AddressZero,
-      stateEncoding: "",
+    abiEncodings: {
+      actionEncoding: `uint256`,
+      stateEncoding: "uint256",
     },
+    appDefinition: AddressZero,
     appSeqNo: 0,
     defaultTimeout: Zero.toHexString(),
     identityHash: getRandomBytes32(),
     initiatorIdentifier: getRandomIdentifier(),
+    responderIdentifier: getRandomIdentifier(),
     latestState: {},
     latestVersionNumber: 0,
-    meta: null,
-    multiAssetMultiPartyCoinTransferInterpreterParams: null,
     multisigAddress: getRandomAddress(),
     outcomeType: OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER,
-    responderIdentifier: getRandomIdentifier(),
-    singleAssetTwoPartyCoinTransferInterpreterParams: null,
-    stateTimeout: toBN(1000).toHexString(),
-    twoPartyOutcomeInterpreterParams: null,
-    ...overrides,
-  };
-};
-
-export const createAppInstanceProposal = (
-  overrides: Partial<AppInstanceProposal> = {},
-): AppInstanceProposal => {
-  return {
-    abiEncodings: { actionEncoding: "", stateEncoding: "" },
-    appDefinition: AddressZero,
-    appSeqNo: 0,
-    defaultTimeout: "0x00",
-    identityHash: getRandomBytes32(),
-    initialState: {},
-    initiatorDeposit: "0x00",
+    outcomeInterpreterParameters: {
+      limit: { _hex: Zero.toHexString(), _isBigNumber: true },
+      tokenAddress: AddressZero,
+    } as SingleAssetTwoPartyCoinTransferInterpreterParamsJson,
+    initiatorDeposit: Zero.toString(),
     initiatorDepositAssetId: AddressZero,
-    initiatorIdentifier: getRandomIdentifier(),
-    meta: null,
-    multiAssetMultiPartyCoinTransferInterpreterParams: undefined,
-    outcomeType: OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER,
-    responderDeposit: "0x00",
+    responderDeposit: Zero.toString(),
     responderDepositAssetId: AddressZero,
-    responderIdentifier: getRandomIdentifier(),
-    singleAssetTwoPartyCoinTransferInterpreterParams: null,
-    stateTimeout: "0x00",
-    twoPartyOutcomeInterpreterParams: undefined,
+    stateTimeout: Zero.toHexString(),
+    meta: null,
     ...overrides,
   };
 };
@@ -81,17 +66,18 @@ export const createAppInstanceProposal = (
 export const createStateChannelJSON = (
   overrides: Partial<StateChannelJSON> = {},
 ): StateChannelJSON => {
-  const userIdentifiers = [getRandomAddress(), getRandomAddress()];
+  const userIdentifiers = overrides.userIdentifiers || [getRandomAddress(), getRandomAddress()];
   const channelData: Omit<StateChannelJSON, "freeBalanceAppInstance"> = {
     addresses: {
-      MinimumViableMultisig: "",
-      ProxyFactory: "",
+      MinimumViableMultisig: getRandomAddress(),
+      ProxyFactory: getRandomAddress(),
     },
     appInstances: [],
+    chainId: env.defaultChain,
     monotonicNumProposedApps: 0,
     multisigAddress: getRandomAddress(),
     proposedAppInstances: [],
-    schemaVersion: 1,
+    schemaVersion: StateSchemaVersion,
     userIdentifiers,
     ...overrides,
   };
@@ -102,6 +88,7 @@ export const createStateChannelJSON = (
       initiatorIdentifier: channelData.userIdentifiers[0],
       multisigAddress: channelData.multisigAddress,
       responderIdentifier: channelData.userIdentifiers[1],
+      meta: null,
       ...overrides.freeBalanceAppInstance,
     }),
   };
@@ -110,7 +97,7 @@ export const createStateChannelJSON = (
 export const createSetStateCommitmentJSON = (
   overrides: Partial<SetStateCommitmentJSON> = {},
 ): SetStateCommitmentJSON => {
-  return deBigNumberifyJson({
+  return deBigNumberifyJson<SetStateCommitmentJSON>({
     appIdentity: {
       channelNonce: Zero,
       participants: [getRandomAddress(), getRandomAddress()],
@@ -124,8 +111,33 @@ export const createSetStateCommitmentJSON = (
     signatures: [getRandomSignature(), getRandomSignature()],
     stateTimeout: Zero,
     versionNumber: Zero,
+    transactionData: getRandomBytes32(),
     ...overrides,
   });
+};
+
+const getContractAddresses = (overrides: Partial<ContractAddresses> = {}): ContractAddresses => {
+  return {
+    ProxyFactory: getRandomAddress(),
+    MinimumViableMultisig: getRandomAddress(),
+    ChallengeRegistry: getRandomAddress(),
+    ConditionalTransactionDelegateTarget: getRandomAddress(),
+    DepositApp: getRandomAddress(),
+    WithdrawApp: getRandomAddress(),
+    HashLockTransferApp: getRandomAddress(),
+    IdentityApp: getRandomAddress(),
+    MultiAssetMultiPartyCoinTransferInterpreter: getRandomAddress(),
+    GraphSignedTransferApp: getRandomAddress(),
+    SimpleLinkedTransferApp: getRandomAddress(),
+    SimpleSignedTransferApp: getRandomAddress(),
+    SimpleTwoPartySwapApp: getRandomAddress(),
+    SingleAssetTwoPartyCoinTransferInterpreter: getRandomAddress(),
+    TimeLockedPassThrough: getRandomAddress(),
+    Token: getRandomAddress(),
+    TwoPartyFixedOutcomeInterpreter: getRandomAddress(),
+    WithdrawInterpreter: getRandomAddress(),
+    ...overrides,
+  };
 };
 
 export const createConditionalTransactionCommitmentJSON = (
@@ -138,8 +150,9 @@ export const createConditionalTransactionCommitmentJSON = (
     interpreterParams: "",
     multisigAddress: getRandomAddress(),
     multisigOwners: [getRandomAddress(), getRandomAddress()],
-    contractAddresses: {} as ContractAddresses,
+    contractAddresses: getContractAddresses(),
     signatures: [getRandomSignature(), getRandomSignature()],
+    transactionData: getRandomBytes32(),
     ...overrides,
   };
 };
@@ -164,6 +177,7 @@ export const createStoredAppChallenge = (
     versionNumber: One,
     finalizesAt: Zero,
     status: StoredAppChallengeStatus.IN_DISPUTE,
+    chainId: env.defaultChain,
     ...overrides,
   };
 };
@@ -173,11 +187,12 @@ export const createStateProgressedEventPayload = (
 ): StateProgressedEventPayload => {
   return {
     identityHash: getRandomBytes32(),
-    action: "0x",
+    action: defaultAbiCoder.encode(["uint256"], [One]),
     versionNumber: One,
     timeout: Zero,
     turnTaker: getRandomAddress(),
     signature: getRandomAddress(),
+    chainId: env.defaultChain,
     ...overrides,
   };
 };
@@ -191,6 +206,140 @@ export const createChallengeUpdatedEventPayload = (
     versionNumber: One,
     finalizesAt: Zero,
     status: ChallengeStatus.IN_DISPUTE,
+    chainId: env.defaultChain,
     ...overrides,
+  };
+};
+
+export const createTestStateChannelJSONs = (
+  nodeIdentifier: string,
+  userIdentifier: string = getRandomIdentifier(),
+  multisigAddress: string = getRandomAddress(),
+) => {
+  const channelJson = createStateChannelJSON({
+    multisigAddress,
+    userIdentifiers: [nodeIdentifier, userIdentifier],
+  });
+  const setupCommitment = createMinimalTransaction();
+  const freeBalanceUpdate = createSetStateCommitmentJSON({
+    appIdentityHash: channelJson.freeBalanceAppInstance!.identityHash,
+  });
+  return { channelJson, setupCommitment, freeBalanceUpdate };
+};
+
+export const createTestChannel = async (
+  cfCoreStore: CFCoreStore,
+  nodeIdentifier: string,
+  userIdentifier: string = getRandomIdentifier(),
+  multisigAddress: string = getRandomAddress(),
+) => {
+  const { channelJson, setupCommitment, freeBalanceUpdate } = createTestStateChannelJSONs(
+    nodeIdentifier,
+    userIdentifier,
+    multisigAddress,
+  );
+  await cfCoreStore.createStateChannel(channelJson, setupCommitment, freeBalanceUpdate);
+
+  return { multisigAddress, userIdentifier, channelJson, setupCommitment, freeBalanceUpdate };
+};
+
+export const createTestChannelWithAppInstance = async (
+  cfCoreStore: CFCoreStore,
+  nodeIdentifier: string,
+  userIdentifier: string = getRandomIdentifier(),
+  multisigAddress: string = getRandomAddress(),
+) => {
+  const { channelJson } = await createTestChannel(
+    cfCoreStore,
+    nodeIdentifier,
+    userIdentifier,
+    multisigAddress,
+  );
+
+  const appProposal = createAppInstanceJson({
+    appSeqNo: 2,
+    initiatorIdentifier: userIdentifier,
+    responderIdentifier: nodeIdentifier,
+    multisigAddress,
+  });
+  const setStateCommitment = createSetStateCommitmentJSON({
+    appIdentityHash: appProposal.identityHash,
+  });
+  const conditionalCommitment = createConditionalTransactionCommitmentJSON({
+    appIdentityHash: appProposal.identityHash,
+  });
+  await cfCoreStore.createAppProposal(
+    multisigAddress,
+    appProposal,
+    2,
+    setStateCommitment,
+    conditionalCommitment,
+  );
+
+  const appInstance = createAppInstanceJson({
+    identityHash: appProposal.identityHash,
+    multisigAddress,
+    initiatorIdentifier: userIdentifier,
+    responderIdentifier: nodeIdentifier,
+    appSeqNo: appProposal.appSeqNo,
+  });
+  const updatedFreeBalance: AppInstanceJson = {
+    ...channelJson.freeBalanceAppInstance!,
+    latestState: { appState: "updated" },
+  };
+  const freeBalanceUpdateCommitment = createSetStateCommitmentJSON({
+    appIdentityHash: channelJson.freeBalanceAppInstance!.identityHash,
+    versionNumber: toBNJson(100),
+  });
+  await cfCoreStore.createAppInstance(
+    multisigAddress,
+    appInstance,
+    updatedFreeBalance,
+    freeBalanceUpdateCommitment,
+  );
+
+  return {
+    multisigAddress,
+    userIdentifier,
+    channelJson,
+    appInstance,
+    updatedFreeBalance,
+    conditionalCommitment,
+    freeBalanceUpdateCommitment,
+  };
+};
+
+export const createTestChallengeWithAppInstanceAndChannel = async (
+  cfCoreStore: CFCoreStore,
+  nodeIdentifier: string,
+  userIdentifierParam: string = getRandomAddress(),
+  multisigAddressParam: string = getRandomAddress(),
+) => {
+  const {
+    multisigAddress,
+    userIdentifier,
+    channelJson,
+    appInstance,
+    updatedFreeBalance,
+  } = await createTestChannelWithAppInstance(
+    cfCoreStore,
+    nodeIdentifier,
+    userIdentifierParam,
+    multisigAddressParam,
+  );
+
+  // add challenge
+  const challenge = createStoredAppChallenge({
+    identityHash: appInstance.identityHash,
+  });
+  await cfCoreStore.saveAppChallenge(challenge);
+
+  return {
+    challenge,
+    multisigAddress,
+    userIdentifier,
+    channelJson,
+    appInstance,
+    updatedFreeBalance,
   };
 };

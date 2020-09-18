@@ -10,14 +10,16 @@ import {
   ProtocolName,
   ProtocolNames,
 } from "@connext/types";
-import { ChannelSigner, ColorfulLogger, stringify, isBN } from "@connext/utils";
+import { ChannelSigner, stringify } from "@connext/utils";
 import axios, { AxiosResponse } from "axios";
 import { Wallet } from "ethers";
 
 import { env } from "./env";
-import { combineObjects } from "./misc";
+import { ethProviderUrl } from "./ethprovider";
+import { getTestLoggers, combineObjects } from "./misc";
+import { expect } from "./assertions";
 
-const log = new ColorfulLogger("Messaging", env.logLevel);
+const { log } = getTestLoggers("Messaging");
 
 // set an artificially high limit to effectively prevent any
 // messaging limits by default (and easily allow for 0)
@@ -101,6 +103,7 @@ export type TestMessagingConfig = {
   protocolLimits: ProtocolMessageLimitInputs;
   apiLimits: ApiLimits;
   signer: IChannelSigner;
+  stopOnCeilingReached: boolean;
 };
 
 type InternalMessagingConfig = Omit<TestMessagingConfig, "protocolLimits"> & {
@@ -164,12 +167,13 @@ const defaultOpts = (): TestMessagingConfig => {
     },
     apiLimits: getDefaultApiLimits(),
     protocolLimits: getDefaultProtocolLimits(),
-    signer: new ChannelSigner(Wallet.createRandom().privateKey, env.ethProviderUrl),
+    signer: new ChannelSigner(Wallet.createRandom().privateKey, ethProviderUrl),
+    stopOnCeilingReached: false,
   };
 };
 
 export const initApiCounter = (): ApiCounter => {
-  let ret = {};
+  const ret = {};
   Object.keys(MessagingEvents).forEach((key) => {
     ret[key] = 0;
   });
@@ -177,7 +181,7 @@ export const initApiCounter = (): ApiCounter => {
 };
 
 export const initProtocolCounter = (): ProtocolMessageCounter => {
-  let ret = {};
+  const ret = {};
   Object.keys(ProtocolNames).forEach((key) => {
     ret[key] = { [SEND]: 0, [RECEIVED]: 0 };
   });
@@ -194,6 +198,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
   private apiCounter: ApiCounter = initApiCounter();
   public providedOptions: Partial<TestMessagingConfig>;
   public options: InternalMessagingConfig;
+  private hasReachedCeiling: boolean = false;
 
   constructor(opts: Partial<TestMessagingConfig>) {
     super();
@@ -204,7 +209,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
       ...combineObjects(opts, defaults),
       signer:
         opts.signer && typeof opts.signer === "string"
-          ? new ChannelSigner(opts.signer, env.ethProviderUrl)
+          ? new ChannelSigner(opts.signer, ethProviderUrl)
           : opts.signer || defaults.signer,
     } as InternalMessagingConfig;
     const getSignature = (msg: string) => this.options.signer.signMessage(msg);
@@ -214,10 +219,11 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
       getSignature: (nonce: string) => Promise<string>,
     ): Promise<string> => {
       try {
-        const nonce = await axios.get(`${this.options.nodeUrl}/auth/${userIdentifier}`);
+        const authUrl = `${this.options.nodeUrl}/auth`;
+        const nonce = await axios.get(`${authUrl}/${userIdentifier}`);
         const sig = await getSignature(nonce.data);
         const bearerToken: AxiosResponse<string> = await axios.post(
-          `${this.options.nodeUrl}/auth`,
+          authUrl,
           {
             sig,
             userIdentifier: userIdentifier,
@@ -230,9 +236,11 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
     };
 
     // NOTE: high maxPingOut prevents stale connection errors while time-travelling
-    const key = `INDRA`;
-    this.connection = new MessagingService(this.options.messagingConfig, key, () =>
-      getBearerToken(this.options.signer.publicIdentifier, getSignature),
+    log.info(`Creating test messaging service w opts: ${stringify(this.options)}`);
+    this.connection = new MessagingService(
+      { ...this.options.messagingConfig, logger: log.newContext("TestMessagingService") },
+      `INDRA`,
+      () => getBearerToken(this.options.signer.publicIdentifier, getSignature),
     );
   }
 
@@ -301,7 +309,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
       } as MessagingEventData);
       // check if there is a high level limit on messages received
       if (!shouldContinue) {
-        log.warn(
+        log.info(
           `Reached API ceiling, refusing to process any more messages. Received ${this.apiCounter[RECEIVED]} total message`,
         );
         return Promise.resolve();
@@ -314,11 +322,11 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
         return callback(msg);
       }
       const canContinue = this.incrementProtocolCount(protocol, msg, RECEIVED);
-      if (!canContinue) {
+      if (!canContinue || (this.hasReachedCeiling && this.options.stopOnCeilingReached)) {
         const msg = `Refusing to process any more messages, ceiling for ${protocol} has been reached (received). ${stringify(
           this.protocolCounter[protocol],
         )}`;
-        log.warn(msg);
+        log.info(msg);
         return Promise.resolve();
       }
       // has params specified, but not included in this message.
@@ -334,7 +342,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
     } as MessagingEventData);
     // check if there is a high level limit on messages received
     if (!shouldContinue) {
-      log.warn(
+      log.info(
         `Reached API ceiling, refusing to process any more messages. Sent ${this.apiCounter[SEND]} total messages`,
       );
       return Promise.resolve();
@@ -348,11 +356,11 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
       return this.connection.send(to, msg);
     }
     const canContinue = this.incrementProtocolCount(protocol, msg, SEND);
-    if (!canContinue) {
+    if (!canContinue || (this.hasReachedCeiling && this.options.stopOnCeilingReached)) {
       const msg = `Refusing to process any more messages, ceiling for ${protocol} has been reached (send). ${stringify(
         this.protocolCounter[protocol],
       )}`;
-      log.warn(msg);
+      log.info(msg);
       return Promise.resolve();
     }
 
@@ -432,13 +440,12 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
     const msgParams = getParamsFromData(msg);
     const { ceiling: indexedCeiling, params } = this.protocolLimits[protocol];
 
-    const ceiling =
-      (indexedCeiling || {})[apiType] === undefined || (indexedCeiling || {})[apiType] === null
-        ? NO_LIMIT
-        : indexedCeiling[apiType];
+    const exists = (x) => x !== undefined && x !== null;
+    const ceiling = exists(indexedCeiling[apiType]) ? indexedCeiling[apiType] : NO_LIMIT;
 
     const evaluateCeiling = () => {
       if (this.protocolCounter[protocol][apiType] >= ceiling) {
+        this.hasReachedCeiling = true;
         return false;
       }
       this.protocolCounter[protocol][apiType]++;
@@ -447,8 +454,7 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
 
     logIf(`protocol: ${protocol}`);
     logIf(`ceiling: ${ceiling}`);
-    logIf(`params: ${stringify(params)}`);
-    logIf(`msg: ${stringify(msg)}`);
+    logIf(`indexedCeiling[${apiType}]: ${stringify(indexedCeiling[apiType])}`);
 
     if (!params) {
       // nothing specified, applies to all
@@ -461,25 +467,15 @@ export class TestMessagingService extends ConnextEventEmitter implements IMessag
       return true;
     }
 
-    let containsVal = false;
-    Object.entries(msgParams).forEach(([key, value]) => {
-      if (!params[key]) {
-        return;
-      }
-      let unnestedVal = value as any;
-      let unnestedComp = params[key];
-      while (typeof unnestedVal === "object" && !isBN(unnestedVal)) {
-        const [key] = Object.entries(unnestedVal as object).pop() as any;
-        unnestedVal = unnestedVal[key];
-        unnestedComp = unnestedComp[key];
-      }
-      containsVal = unnestedVal.toString() === unnestedComp.toString();
-    });
-    if (containsVal) {
+    try {
+      expect(msgParams).to.containSubset(params);
+      const ret = evaluateCeiling();
+      logIf(`evaluated, should continue: ${ret}`);
+      // does contain params
       return evaluateCeiling();
+    } catch (e) {
+      // does not contain params, ignore
+      return true;
     }
-    // otherwise dont count and return true (msg does not include)
-    // user-specificed params
-    return true;
   }
 }

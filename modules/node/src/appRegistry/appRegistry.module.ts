@@ -16,9 +16,9 @@ import { WithdrawRepository } from "../withdraw/withdraw.repository";
 import { SignedTransferModule } from "../signedTransfer/signedTransfer.module";
 import { HashLockTransferModule } from "../hashLockTransfer/hashLockTransfer.module";
 import { DepositModule } from "../deposit/deposit.module";
+import { TransferRepository } from "../transfer/transfer.repository";
 
 import { AppRegistryController } from "./appRegistry.controller";
-import { AppRegistryRepository } from "./appRegistry.repository";
 import { AppRegistryService } from "./appRegistry.service";
 import { AppActionsService } from "./appActions.service";
 
@@ -40,9 +40,9 @@ import { AppActionsService } from "./appActions.service";
     TransferModule,
     TypeOrmModule.forFeature([
       AppInstanceRepository,
-      AppRegistryRepository,
       ChannelRepository,
       WithdrawRepository,
+      TransferRepository,
     ]),
     WithdrawModule,
   ],

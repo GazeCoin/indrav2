@@ -1,8 +1,6 @@
 import { Injectable } from "@nestjs/common";
 import {
   AppInstanceJson,
-  AppInstanceProposal,
-  AppState,
   ChallengeEvents,
   ChallengeStatus,
   ChallengeUpdatedEventPayload,
@@ -15,36 +13,37 @@ import {
   SetStateCommitmentJSON,
   StateChannelJSON,
   StateProgressedEventPayload,
+  StateSchemaVersion,
   STORE_SCHEMA_VERSION,
   StoredAppChallenge,
   StoredAppChallengeStatus,
   WithdrawalMonitorObject,
 } from "@connext/types";
-import { toBN, getSignerAddressFromPublicIdentifier } from "@connext/utils";
+import { getSignerAddressFromPublicIdentifier, stringify, toBN } from "@connext/utils";
 import { getManager } from "typeorm";
-import { constants, utils } from "ethers";
+import { BigNumber, constants, utils } from "ethers";
 
-import { AppInstanceRepository } from "../appInstance/appInstance.repository";
+import {
+  AppInstanceRepository,
+  AppInstanceSerializer,
+} from "../appInstance/appInstance.repository";
 import {
   SetStateCommitmentRepository,
   setStateToJson,
 } from "../setStateCommitment/setStateCommitment.repository";
-import { WithdrawCommitmentRepository } from "../withdrawCommitment/withdrawCommitment.repository";
 import { ConfigService } from "../config/config.service";
-// eslint-disable-next-line max-len
 import {
   ConditionalTransactionCommitmentRepository,
   convertConditionalCommitmentToJson,
 } from "../conditionalCommitment/conditionalCommitment.repository";
-import { ChannelRepository, convertChannelToJSON } from "../channel/channel.repository";
+import { ChannelRepository, ChannelSerializer } from "../channel/channel.repository";
 import { SetupCommitmentRepository } from "../setupCommitment/setupCommitment.repository";
 import { AppInstance, AppType } from "../appInstance/appInstance.entity";
 import { SetStateCommitment } from "../setStateCommitment/setStateCommitment.entity";
 import { Channel } from "../channel/channel.entity";
-import { ConditionalTransactionCommitment } from "../conditionalCommitment/conditionalCommitment.entity";
 import {
-  entityToStoredChallenge,
   ChallengeRepository,
+  entityToStoredChallenge,
   ProcessedBlockRepository,
 } from "../challenge/challenge.repository";
 import { Challenge, ProcessedBlock } from "../challenge/challenge.entity";
@@ -53,15 +52,18 @@ import {
   StateProgressedEvent,
 } from "../stateProgressedEvent/stateProgressedEvent.entity";
 import {
-  entityToChallengeUpdatedPayload,
   ChallengeUpdatedEvent,
+  entityToChallengeUpdatedPayload,
 } from "../challengeUpdatedEvent/challengeUpdatedEvent.entity";
 import { SetupCommitment } from "../setupCommitment/setupCommitment.entity";
 import { ChallengeRegistry } from "@connext/contracts";
 import { LoggerService } from "../logger/logger.service";
+import { CacheService } from "../caching/cache.service";
+import { ConditionalTransactionCommitment } from "../conditionalCommitment/conditionalCommitment.entity";
+import { Transfer } from "../transfer/transfer.entity";
 
 const { Zero, AddressZero } = constants;
-const { bigNumberify, defaultAbiCoder } = utils;
+const { defaultAbiCoder } = utils;
 
 @Injectable()
 export class CFCoreStore implements IStoreService {
@@ -73,11 +75,11 @@ export class CFCoreStore implements IStoreService {
     // eslint-disable-next-line max-len
     private readonly conditionalTransactionCommitmentRepository: ConditionalTransactionCommitmentRepository,
     private readonly setStateCommitmentRepository: SetStateCommitmentRepository,
-    private readonly withdrawCommitmentRepository: WithdrawCommitmentRepository,
     private readonly configService: ConfigService,
     private readonly setupCommitmentRepository: SetupCommitmentRepository,
     private readonly challengeRepository: ChallengeRepository,
     private readonly processedBlockRepository: ProcessedBlockRepository,
+    private readonly cache: CacheService,
   ) {
     log.setContext("CFCoreStore");
   }
@@ -102,23 +104,77 @@ export class CFCoreStore implements IStoreService {
 
   async getAllChannels(): Promise<StateChannelJSON[]> {
     const allChannels = await this.channelRepository.find();
-    return allChannels.map((channel) => convertChannelToJSON(channel));
+    return allChannels.map((channel) => ChannelSerializer.toJSON(channel)!);
   }
 
-  getChannel(multisig: string): Promise<Channel> {
-    return this.channelRepository.findByMultisigAddressOrThrow(multisig);
+  async getStateChannel(multisigAddress: string): Promise<StateChannelJSON | undefined> {
+    const cacheRes = this.cache.wrap<StateChannelJSON, Channel>(
+      `channel:multisig:${multisigAddress}`,
+      60,
+      async () => {
+        const res = (await this.channelRepository.findByMultisigAddress(multisigAddress))!;
+        return res;
+      },
+      ChannelSerializer,
+    );
+    return cacheRes;
   }
 
-  getStateChannel(multisigAddress: string): Promise<StateChannelJSON> {
-    return this.channelRepository.getStateChannel(multisigAddress);
+  async getStateChannelByOwnersAndChainId(
+    owners: string[],
+    chainId: number,
+  ): Promise<StateChannelJSON | undefined> {
+    const multisig = await this.cache.get(
+      `channel:owners:${this.canonicalizeOwners(owners)}:${chainId}`,
+    );
+    if (multisig) {
+      return this.getStateChannel(JSON.parse(multisig));
+    }
+
+    const chan = await this.channelRepository.findByOwners([owners[0], owners[1]]);
+    if (!chan) {
+      return undefined;
+    }
+    await this.cache.set(
+      `channel:owners:${this.canonicalizeOwners([
+        chan.nodeIdentifier,
+        chan.userIdentifier,
+      ])}:${chainId}`,
+      70,
+      chan.multisigAddress,
+    );
+    await this.cache.set(
+      `channel:multisig:${chan.multisigAddress}`,
+      60,
+      ChannelSerializer.toJSON(chan),
+    );
+    return ChannelSerializer.toJSON(chan);
   }
 
-  getStateChannelByOwners(owners: string[]): Promise<StateChannelJSON> {
-    return this.channelRepository.getStateChannelByOwners(owners);
-  }
+  async getStateChannelByAppIdentityHash(
+    appIdentityHash: string,
+  ): Promise<StateChannelJSON | undefined> {
+    const multisig = await this.cache.get(`channel:appIdentityHash:${appIdentityHash}`);
+    if (multisig) {
+      return this.getStateChannel(JSON.parse(multisig));
+    }
 
-  getStateChannelByAppIdentityHash(appIdentityHash: string): Promise<StateChannelJSON> {
-    return this.channelRepository.getStateChannelByAppIdentityHash(appIdentityHash);
+    const chan = await this.channelRepository.findByAppIdentityHash(appIdentityHash);
+    if (!chan) {
+      return undefined;
+    }
+    await this.cache.set(
+      `channel:owners:${this.canonicalizeOwners([chan.nodeIdentifier, chan.userIdentifier])}`,
+      70,
+      chan.multisigAddress,
+    );
+    await this.cache.set(`channel:appIdentityHash:${appIdentityHash}`, 70, chan.multisigAddress);
+    await this.cache.set(
+      `channel:multisig:${chan.multisigAddress}`,
+      60,
+      ChannelSerializer.toJSON(chan),
+    );
+    return ChannelSerializer.toJSON(chan);
   }
 
   async createStateChannel(
@@ -134,46 +190,38 @@ export class CFCoreStore implements IStoreService {
       addresses,
       freeBalanceAppInstance,
       monotonicNumProposedApps,
+      chainId,
     } = stateChannel;
 
-    const channel = new Channel();
+    let channel = new Channel();
     channel.multisigAddress = multisigAddress;
-    channel.schemaVersion = this.schemaVersion;
-    channel.userIdentifier = userIdentifier;
+    channel.schemaVersion = StateSchemaVersion;
+    channel.userIdentifier = userIdentifier!;
     channel.nodeIdentifier = nodeIdentifier;
     channel.addresses = addresses;
     channel.monotonicNumProposedApps = monotonicNumProposedApps;
-    const swaps = this.configService.getAllowedSwaps();
-    const activeCollateralizations = {};
-    swaps.forEach((swap) => {
-      activeCollateralizations[swap.to] = false;
-    });
-    channel.activeCollateralizations = activeCollateralizations;
-
-    const participants = [
-      freeBalanceAppInstance.initiatorIdentifier,
-      freeBalanceAppInstance.responderIdentifier,
-    ];
-    const userId = participants.find((p) => p === userIdentifier);
-    const nodeId = participants.find((p) => p === nodeIdentifier);
+    channel.chainId = chainId;
     const {
       identityHash,
-      appInterface: { stateEncoding, actionEncoding, addr },
+      abiEncodings: { stateEncoding, actionEncoding },
       outcomeType,
       latestState,
       stateTimeout,
       defaultTimeout,
       latestVersionNumber,
       appSeqNo,
-    } = freeBalanceAppInstance;
+      appDefinition,
+      outcomeInterpreterParameters,
+      initiatorIdentifier,
+      responderIdentifier,
+    } = freeBalanceAppInstance!;
 
     const freeBalanceApp = new AppInstance();
     freeBalanceApp.identityHash = identityHash;
-    freeBalanceApp.appDefinition = addr;
+    freeBalanceApp.appDefinition = appDefinition;
     freeBalanceApp.stateEncoding = stateEncoding;
-    freeBalanceApp.actionEncoding = actionEncoding;
+    freeBalanceApp.actionEncoding = actionEncoding!;
     freeBalanceApp.outcomeType = OutcomeType[outcomeType];
-    freeBalanceApp.initialState = latestState as any;
     freeBalanceApp.appSeqNo = appSeqNo;
     freeBalanceApp.latestState = latestState as any;
     freeBalanceApp.latestVersionNumber = latestVersionNumber;
@@ -185,11 +233,11 @@ export class CFCoreStore implements IStoreService {
     freeBalanceApp.initiatorDepositAssetId = AddressZero;
     freeBalanceApp.responderDeposit = Zero;
     freeBalanceApp.responderDepositAssetId = AddressZero;
-    freeBalanceApp.responderIdentifier = userIdentifier;
-    freeBalanceApp.initiatorIdentifier = nodeIdentifier;
-    freeBalanceApp.userIdentifier = userId;
-    freeBalanceApp.nodeIdentifier = nodeId;
+    freeBalanceApp.responderIdentifier = responderIdentifier;
+    freeBalanceApp.initiatorIdentifier = initiatorIdentifier;
     freeBalanceApp.type = AppType.FREE_BALANCE;
+    freeBalanceApp.outcomeInterpreterParameters = outcomeInterpreterParameters;
+    freeBalanceApp.channel = channel;
 
     channel.appInstances = [freeBalanceApp];
 
@@ -206,6 +254,7 @@ export class CFCoreStore implements IStoreService {
 
     channel.setupCommitment = setupCommitment;
 
+    // eslint-disable-next-line max-len
     let freeBalanceUpdateCommitment = await this.setStateCommitmentRepository.findByAppIdentityHashAndVersionNumber(
       freeBalanceApp.identityHash,
       toBN(signedFreeBalanceUpdate.versionNumber),
@@ -226,300 +275,36 @@ export class CFCoreStore implements IStoreService {
     freeBalanceUpdateCommitment.versionNumber = toBN(
       signedFreeBalanceUpdate.versionNumber,
     ).toNumber();
+    freeBalanceUpdateCommitment.transactionData = signedFreeBalanceUpdate.transactionData;
 
     await getManager().transaction(async (transactionalEntityManager) => {
-      await transactionalEntityManager.save(channel);
+      channel = await transactionalEntityManager.save(channel);
+      await transactionalEntityManager.save(freeBalanceApp);
       await transactionalEntityManager.save(freeBalanceUpdateCommitment);
     });
-  }
-
-  getAppInstance(appIdentityHash: string): Promise<AppInstanceJson> {
-    return this.appInstanceRepository.getAppInstance(appIdentityHash);
-  }
-
-  async createAppInstance(
-    multisigAddress: string,
-    appJson: AppInstanceJson,
-    freeBalanceAppInstance: AppInstanceJson,
-    signedFreeBalanceUpdate: SetStateCommitmentJSON,
-    signedConditionalTxCommitment: ConditionalTransactionCommitmentJSON,
-  ): Promise<void> {
-    const {
-      identityHash,
-      initiatorIdentifier,
-      responderIdentifier,
-      latestState,
-      stateTimeout,
-      latestVersionNumber,
-      meta,
-      outcomeType,
-      twoPartyOutcomeInterpreterParams,
-      multiAssetMultiPartyCoinTransferInterpreterParams,
-      singleAssetTwoPartyCoinTransferInterpreterParams,
-    } = appJson;
-    const proposal = await this.appInstanceRepository.findByIdentityHashOrThrow(identityHash);
-
-    // upgrade proposal to instance
-    proposal.type = AppType.INSTANCE;
-    // save user/node specific ids
-    const nodeId = this.configService.getPublicIdentifier();
-    proposal.userIdentifier = [initiatorIdentifier, responderIdentifier].find((p) => p !== nodeId);
-    proposal.nodeIdentifier = [initiatorIdentifier, responderIdentifier].find((p) => p === nodeId);
-
-    proposal.meta = meta;
-
-    proposal.initialState = latestState;
-    proposal.latestState = latestState;
-    proposal.stateTimeout = stateTimeout;
-    proposal.latestVersionNumber = latestVersionNumber;
-
-    // interpreter params
-    switch (OutcomeType[outcomeType]) {
-      case OutcomeType.TWO_PARTY_FIXED_OUTCOME:
-        proposal.outcomeInterpreterParameters = twoPartyOutcomeInterpreterParams;
-        break;
-
-      case OutcomeType.MULTI_ASSET_MULTI_PARTY_COIN_TRANSFER:
-        proposal.outcomeInterpreterParameters = multiAssetMultiPartyCoinTransferInterpreterParams;
-        break;
-
-      case OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER:
-        proposal.outcomeInterpreterParameters = singleAssetTwoPartyCoinTransferInterpreterParams;
-        break;
-
-      default:
-        throw new Error(`Unrecognized outcome type: ${OutcomeType[outcomeType]}`);
-    }
-
-    const existingConditionalTx = await this.conditionalTransactionCommitmentRepository.findByAppIdentityHash(
-      appJson.identityHash,
+    await this.cache.set(
+      `channel:multisig:${multisigAddress}`,
+      60,
+      ChannelSerializer.toJSON(channel),
     );
-
-    await getManager().transaction(async (transactionalEntityManager) => {
-      await transactionalEntityManager.save(proposal);
-      await transactionalEntityManager
-        .createQueryBuilder()
-        .update(AppInstance)
-        .set({
-          latestState: freeBalanceAppInstance.latestState as any,
-          stateTimeout: freeBalanceAppInstance.stateTimeout,
-          latestVersionNumber: freeBalanceAppInstance.latestVersionNumber,
-        })
-        .where("identityHash = :identityHash", {
-          identityHash: freeBalanceAppInstance.identityHash,
-        })
-        .execute();
-
-      await transactionalEntityManager
-        .createQueryBuilder()
-        .update(SetStateCommitment)
-        .set({
-          appIdentity: signedFreeBalanceUpdate.appIdentity,
-          appStateHash: signedFreeBalanceUpdate.appStateHash,
-          challengeRegistryAddress: signedFreeBalanceUpdate.challengeRegistryAddress,
-          signatures: signedFreeBalanceUpdate.signatures,
-          stateTimeout: toBN(signedFreeBalanceUpdate.stateTimeout).toString(),
-          versionNumber: toBN(signedFreeBalanceUpdate.versionNumber).toNumber(),
-        })
-        .where('"appIdentityHash" = :appIdentityHash', {
-          appIdentityHash: freeBalanceAppInstance.identityHash,
-        })
-        .execute();
-
-      // idempotence
-      if (existingConditionalTx) {
-        await transactionalEntityManager
-          .createQueryBuilder()
-          .update(ConditionalTransactionCommitment)
-          .set({
-            freeBalanceAppIdentityHash: signedConditionalTxCommitment.freeBalanceAppIdentityHash,
-            multisigAddress: signedConditionalTxCommitment.multisigAddress,
-            multisigOwners: signedConditionalTxCommitment.multisigOwners,
-            interpreterAddr: signedConditionalTxCommitment.interpreterAddr,
-            interpreterParams: signedConditionalTxCommitment.interpreterParams,
-            signatures: signedConditionalTxCommitment.signatures,
-            app: proposal,
-          })
-          .where('"appIdentityHash" = :appIdentityHash', {
-            appIdentityHash: signedConditionalTxCommitment.freeBalanceAppIdentityHash,
-          })
-          .execute();
-      } else {
-        await transactionalEntityManager
-          .createQueryBuilder()
-          .insert()
-          .into(ConditionalTransactionCommitment)
-          .values({
-            freeBalanceAppIdentityHash: signedConditionalTxCommitment.freeBalanceAppIdentityHash,
-            multisigAddress: signedConditionalTxCommitment.multisigAddress,
-            multisigOwners: signedConditionalTxCommitment.multisigOwners,
-            interpreterAddr: signedConditionalTxCommitment.interpreterAddr,
-            interpreterParams: signedConditionalTxCommitment.interpreterParams,
-            signatures: signedConditionalTxCommitment.signatures,
-            app: proposal,
-          })
-          .execute();
-      }
-    });
+    await this.cache.set(
+      `channel:owners:${this.canonicalizeOwners([channel.nodeIdentifier, channel.userIdentifier])}`,
+      70,
+      channel.multisigAddress,
+    );
+    await this.cache.set(
+      `appInstance:identityHash:${freeBalanceApp.identityHash}`,
+      60,
+      AppInstanceSerializer.toJSON(freeBalanceApp),
+    );
   }
 
-  async updateAppInstance(
+  async updateNumProposedApps(
     multisigAddress: string,
-    appJson: AppInstanceJson,
-    signedSetStateCommitment: SetStateCommitmentJSON,
-  ): Promise<void> {
-    const { identityHash, latestState, stateTimeout, latestVersionNumber } = appJson;
-    const app = await this.appInstanceRepository.findByIdentityHash(identityHash);
-
-    if (!app) {
-      throw new Error(`No app found when trying to update. AppId: ${identityHash}`);
-    }
-
-    if (app.type !== AppType.INSTANCE && app.type !== AppType.FREE_BALANCE) {
-      throw new Error(`App is not of correct type, type: ${app.type}`);
-    }
-
-    await getManager().transaction(async (transactionalEntityManager) => {
-      await transactionalEntityManager
-        .createQueryBuilder()
-        .update(AppInstance)
-        .set({
-          latestState: latestState as AppState,
-          stateTimeout,
-          latestVersionNumber,
-        })
-        .where("identityHash = :identityHash", { identityHash })
-        .execute();
-
-      await transactionalEntityManager
-        .createQueryBuilder()
-        .update(SetStateCommitment)
-        .set({
-          appIdentity: signedSetStateCommitment.appIdentity,
-          appStateHash: signedSetStateCommitment.appStateHash,
-          challengeRegistryAddress: signedSetStateCommitment.challengeRegistryAddress,
-          signatures: signedSetStateCommitment.signatures,
-          stateTimeout: toBN(signedSetStateCommitment.stateTimeout).toString(),
-          versionNumber: toBN(signedSetStateCommitment.versionNumber).toNumber(),
-        })
-        .where('"appIdentityHash" = :appIdentityHash', {
-          appIdentityHash: signedSetStateCommitment.appIdentityHash,
-        })
-        .execute();
-    });
-  }
-
-  async removeAppInstance(
-    multisigAddress: string,
-    appIdentityHash: string,
-    freeBalanceAppInstance: AppInstanceJson,
-    signedFreeBalanceUpdate: SetStateCommitmentJSON,
-  ): Promise<void> {
-    const app = await this.appInstanceRepository.findByIdentityHash(appIdentityHash);
-    if (app) {
-      app.type = AppType.UNINSTALLED;
-      app.channel = null;
-    } else {
-      this.log.warn(`Could not find app instance to remove`);
-    }
-
-    await getManager().transaction(async (transactionalEntityManager) => {
-      if (app) {
-        await transactionalEntityManager.save(app);
-      }
-      await transactionalEntityManager
-        .createQueryBuilder()
-        .update(AppInstance)
-        .set({
-          latestState: freeBalanceAppInstance.latestState as any,
-          stateTimeout: freeBalanceAppInstance.stateTimeout,
-          latestVersionNumber: freeBalanceAppInstance.latestVersionNumber,
-        })
-        .where("identityHash = :identityHash", {
-          identityHash: freeBalanceAppInstance.identityHash,
-        })
-        .execute();
-      await transactionalEntityManager
-        .createQueryBuilder()
-        .relation(Channel, "appInstances")
-        .of(multisigAddress)
-        .remove(app.identityHash);
-
-      await transactionalEntityManager
-        .createQueryBuilder()
-        .update(SetStateCommitment)
-        .set({
-          appIdentity: signedFreeBalanceUpdate.appIdentity,
-          appStateHash: signedFreeBalanceUpdate.appStateHash,
-          challengeRegistryAddress: signedFreeBalanceUpdate.challengeRegistryAddress,
-          signatures: signedFreeBalanceUpdate.signatures,
-          stateTimeout: toBN(signedFreeBalanceUpdate.stateTimeout).toString(),
-          versionNumber: toBN(signedFreeBalanceUpdate.versionNumber).toNumber(),
-        })
-        .where('"appIdentityHash" = :appIdentityHash', {
-          appIdentityHash: freeBalanceAppInstance.identityHash,
-        })
-        .execute();
-    });
-  }
-
-  getAppProposal(appIdentityHash: string): Promise<AppInstanceProposal> {
-    return this.appInstanceRepository.getAppProposal(appIdentityHash);
-  }
-
-  async createAppProposal(
-    multisigAddress: string,
-    appProposal: AppInstanceProposal,
     numProposedApps: number,
-    signedSetStateCommitment: SetStateCommitmentJSON,
+    stateChannel: StateChannelJSON,
   ): Promise<void> {
-    const channel = await this.channelRepository.findByMultisigAddressOrThrow(multisigAddress);
-
-    const app = new AppInstance();
-    app.type = AppType.PROPOSAL;
-    app.identityHash = appProposal.identityHash;
-    app.actionEncoding = appProposal.abiEncodings.actionEncoding;
-    app.stateEncoding = appProposal.abiEncodings.stateEncoding;
-    app.appDefinition = appProposal.appDefinition;
-    app.appSeqNo = appProposal.appSeqNo;
-    app.initiatorDeposit = bigNumberify(appProposal.initiatorDeposit);
-    app.initiatorDepositAssetId = appProposal.initiatorDepositAssetId;
-    app.responderDeposit = bigNumberify(appProposal.responderDeposit);
-    app.responderDepositAssetId = appProposal.responderDepositAssetId;
-    app.defaultTimeout = appProposal.defaultTimeout;
-    app.stateTimeout = appProposal.stateTimeout;
-    app.responderIdentifier = appProposal.responderIdentifier;
-    app.initiatorIdentifier = appProposal.initiatorIdentifier;
-    app.outcomeType = appProposal.outcomeType;
-    app.meta = appProposal.meta;
-    app.initialState = appProposal.initialState;
-    app.latestState = appProposal.initialState;
-    app.latestVersionNumber = 0;
-    app.channel = channel;
-
-    let setStateCommitment = await this.setStateCommitmentRepository.findByAppIdentityHashAndVersionNumber(
-      appProposal.identityHash,
-      toBN(signedSetStateCommitment.versionNumber),
-    );
-
-    if (!setStateCommitment) {
-      setStateCommitment = new SetStateCommitment();
-    }
-    setStateCommitment.app = app;
-    setStateCommitment.appIdentity = signedSetStateCommitment.appIdentity;
-    setStateCommitment.appStateHash = signedSetStateCommitment.appStateHash;
-    setStateCommitment.challengeRegistryAddress = signedSetStateCommitment.challengeRegistryAddress;
-    setStateCommitment.signatures = signedSetStateCommitment.signatures;
-    setStateCommitment.stateTimeout = toBN(signedSetStateCommitment.stateTimeout).toString();
-    setStateCommitment.versionNumber = toBN(signedSetStateCommitment.versionNumber).toNumber();
-
-    // because the app instance has `cascade` set to true, saving
-    // the channel will involve multiple queries and should be put
-    // within a transaction
     await getManager().transaction(async (transactionalEntityManager) => {
-      await transactionalEntityManager.save(app);
-      await transactionalEntityManager.save(setStateCommitment);
-
       await transactionalEntityManager
         .createQueryBuilder()
         .update(Channel)
@@ -528,42 +313,201 @@ export class CFCoreStore implements IStoreService {
         })
         .where("multisigAddress = :multisigAddress", { multisigAddress })
         .execute();
-
-      await transactionalEntityManager
-        .createQueryBuilder()
-        .relation(Channel, "appInstances")
-        .of(multisigAddress)
-        .add(app.identityHash);
+    });
+    await this.cache.mergeCacheValues<StateChannelJSON>(`channel:multisig:${multisigAddress}`, 60, {
+      monotonicNumProposedApps: numProposedApps,
     });
   }
 
-  async removeAppProposal(multisigAddress: string, appIdentityHash: string): Promise<void> {
-    // called in protocol during install and reject protocols
-    // but we dont "remove" app proposals, they get upgraded. so
-    // simply return without editing, and set the status to `REJECTED`
-    // in the listener
-    const app = await this.appInstanceRepository.findByIdentityHash(appIdentityHash);
-    if (!app || app.type !== AppType.PROPOSAL) {
-      return;
-    }
-    app.type = AppType.REJECTED;
+  async getAppProposal(appIdentityHash: string): Promise<AppInstanceJson | undefined> {
+    return this.cache.wrap<AppInstanceJson, AppInstance | undefined>(
+      `appInstance:identityHash:${appIdentityHash}`,
+      60,
+      () => this.appInstanceRepository.findByIdentityHashAndType(appIdentityHash, AppType.PROPOSAL),
+      AppInstanceSerializer,
+    );
+  }
 
-    app.channel = undefined;
+  async createAppProposal(
+    multisigAddress: string,
+    appProposal: AppInstanceJson,
+    numProposedApps: number,
+    signedSetStateCommitment: SetStateCommitmentJSON,
+    signedConditionalTxCommitment: ConditionalTransactionCommitmentJSON,
+    stateChannelJson?: StateChannelJSON,
+  ): Promise<void> {
+    await getManager().query("SELECT create_app_proposal($1, $2, $3, $4)", [
+      appProposal,
+      numProposedApps,
+      {
+        ...signedSetStateCommitment,
+        versionNumber: BigNumber.from(signedSetStateCommitment.versionNumber).toNumber(),
+        stateTimeout: BigNumber.from(signedSetStateCommitment.stateTimeout).toHexString(),
+      },
+      signedConditionalTxCommitment,
+    ]);
+
+    // Update cache values
+
+    await this.cache.set<AppInstanceJson>(
+      `appInstance:identityHash:${appProposal.identityHash}`,
+      60,
+      appProposal,
+    );
+
+    await this.cache.set<StateChannelJSON>(
+      `channel:multisig:${multisigAddress}`,
+      60,
+      stateChannelJson!,
+    );
+
+    await this.cache.set(
+      `channel:appIdentityHash:${appProposal.identityHash}`,
+      70,
+      multisigAddress,
+    );
+  }
+
+  async removeAppProposal(
+    multisigAddress: string,
+    appIdentityHash: string,
+    stateChannelJson?: StateChannelJSON,
+  ): Promise<void> {
     await getManager().transaction(async (transactionalEntityManager) => {
-      await transactionalEntityManager.save(app);
       await transactionalEntityManager
         .createQueryBuilder()
-        .relation(Channel, "appInstances")
-        .of(multisigAddress)
-        .remove(app.identityHash);
+        .delete()
+        .from(SetStateCommitment)
+        .where(`"appIdentityHash" = :appIdentityHash`, { appIdentityHash })
+        .execute();
+
+      await transactionalEntityManager
+        .createQueryBuilder()
+        .delete()
+        .from(ConditionalTransactionCommitment)
+        .where(`"appIdentityHash" = :appIdentityHash`, { appIdentityHash })
+        .execute();
+
+      await transactionalEntityManager
+        .createQueryBuilder()
+        .delete()
+        .from(AppInstance)
+        .where(`"identityHash" = :appIdentityHash`, { appIdentityHash })
+        .execute();
+
+      await this.cache.del(`appInstance:identityHash:${appIdentityHash}`);
+      await this.cache.set<StateChannelJSON>(
+        `channel:multisig:${multisigAddress}`,
+        60,
+        stateChannelJson!,
+      );
     });
   }
 
-  getFreeBalance(multisigAddress: string): Promise<AppInstanceJson> {
+  async getAppInstance(appIdentityHash: string): Promise<AppInstanceJson | undefined> {
+    return this.cache.wrap<AppInstanceJson, AppInstance | undefined>(
+      `appInstance:identityHash:${appIdentityHash}`,
+      60,
+      () => this.appInstanceRepository.findByIdentityHashAndType(appIdentityHash, AppType.INSTANCE),
+      AppInstanceSerializer,
+    );
+  }
+
+  async createAppInstance(
+    multisigAddress: string,
+    appJson: AppInstanceJson,
+    freeBalanceAppInstance: AppInstanceJson,
+    signedFreeBalanceUpdate: SetStateCommitmentJSON,
+    stateChannelJson?: StateChannelJSON,
+  ): Promise<void> {
+    const { identityHash } = appJson;
+
+    await getManager().query("SELECT create_app_instance($1, $2, $3)", [
+      appJson,
+      freeBalanceAppInstance,
+      {
+        ...signedFreeBalanceUpdate,
+        versionNumber: BigNumber.from(signedFreeBalanceUpdate.versionNumber).toNumber(),
+        stateTimeout: BigNumber.from(signedFreeBalanceUpdate.stateTimeout).toHexString(),
+      },
+    ]);
+
+    await this.cache.set<AppInstanceJson>(
+      `appInstance:identityHash:${freeBalanceAppInstance.identityHash}`,
+      60,
+      freeBalanceAppInstance,
+    );
+    await this.cache.set<AppInstanceJson>(`appInstance:identityHash:${identityHash}`, 60, appJson);
+    await this.cache.set(`channel:appIdentityHash:${identityHash}`, 70, multisigAddress);
+    await this.cache.set<StateChannelJSON>(
+      `channel:multisig:${multisigAddress}`,
+      60,
+      stateChannelJson!,
+    );
+  }
+
+  async updateAppInstance(
+    multisigAddress: string,
+    appJson: AppInstanceJson,
+    signedSetStateCommitment: SetStateCommitmentJSON,
+    stateChannelJson?: StateChannelJSON,
+  ): Promise<void> {
+    const { identityHash } = appJson;
+
+    await getManager().query("SELECT update_app_instance($1, $2)", [
+      appJson,
+      {
+        ...signedSetStateCommitment,
+        versionNumber: BigNumber.from(signedSetStateCommitment.versionNumber).toNumber(),
+        stateTimeout: BigNumber.from(signedSetStateCommitment.stateTimeout).toHexString(),
+      },
+    ]);
+
+    await this.cache.set<AppInstanceJson>(`appInstance:identityHash:${identityHash}`, 60, appJson);
+    await this.cache.set(`channel:appIdentityHash:${identityHash}`, 70, multisigAddress);
+    await this.cache.set<StateChannelJSON>(
+      `channel:multisig:${multisigAddress}`,
+      60,
+      stateChannelJson!,
+    );
+  }
+
+  async removeAppInstance(
+    multisigAddress: string,
+    appInstance: AppInstanceJson,
+    freeBalanceAppInstance: AppInstanceJson,
+    signedFreeBalanceUpdate: SetStateCommitmentJSON,
+    stateChannelJson?: StateChannelJSON,
+  ): Promise<void> {
+    await getManager().query("SELECT remove_app_instance($1, $2, $3)", [
+      appInstance,
+      freeBalanceAppInstance,
+      {
+        ...signedFreeBalanceUpdate,
+        versionNumber: BigNumber.from(signedFreeBalanceUpdate.versionNumber).toNumber(),
+        stateTimeout: BigNumber.from(signedFreeBalanceUpdate.stateTimeout).toHexString(),
+      },
+    ]);
+
+    await this.cache.set<AppInstanceJson>(
+      `appInstance:identityHash:${freeBalanceAppInstance.identityHash}`,
+      60,
+      freeBalanceAppInstance,
+    );
+    await this.cache.del(`appInstance:identityHash:${appInstance.identityHash}`);
+    await this.cache.del(`channel:appIdentityHash:${appInstance.identityHash}`);
+    await this.cache.set<StateChannelJSON>(
+      `channel:multisig:${multisigAddress}`,
+      60,
+      stateChannelJson!,
+    );
+  }
+
+  getFreeBalance(multisigAddress: string): Promise<AppInstanceJson | undefined> {
     return this.appInstanceRepository.getFreeBalance(multisigAddress);
   }
 
-  getSetupCommitment(multisigAddress: string): Promise<MinimalTransaction> {
+  getSetupCommitment(multisigAddress: string): Promise<MinimalTransaction | undefined> {
     return this.setupCommitmentRepository.getCommitment(multisigAddress);
   }
 
@@ -663,13 +607,7 @@ export class CFCoreStore implements IStoreService {
     const commitment = await this.conditionalTransactionCommitmentRepository.findByAppIdentityHash(
       appIdentityHash,
     );
-    return (
-      commitment &&
-      convertConditionalCommitmentToJson(
-        commitment,
-        await this.configService.getContractAddresses(),
-      )
-    );
+    return commitment && convertConditionalCommitmentToJson(commitment);
   }
 
   clear(): Promise<void> {
@@ -747,26 +685,27 @@ export class CFCoreStore implements IStoreService {
   async getStateProgressedEvents(appIdentityHash: string): Promise<StateProgressedEventPayload[]> {
     const challenge = await this.challengeRepository.findByIdentityHashOrThrow(appIdentityHash);
 
-    return challenge.stateProgressedEvents.map((event) =>
-      entityToStateProgressedEventPayload(event, challenge),
+    return challenge.stateProgressedEvents.map(
+      (event) => entityToStateProgressedEventPayload(event, challenge)!,
     );
   }
 
   async addOnchainAction(appIdentityHash: string, provider: JsonRpcProvider): Promise<void> {
     const channel = await this.channelRepository.findByAppIdentityHashOrThrow(appIdentityHash);
     const app = channel.appInstances.find((a) => a.identityHash === appIdentityHash);
+    // eslint-disable-next-line max-len
     const latestSetState = await this.setStateCommitmentRepository.findByAppIdentityHashAndVersionNumber(
       appIdentityHash,
-      toBN(app.latestVersionNumber),
+      toBN(app!.latestVersionNumber),
     );
     // fetch onchain data
     const registry = new Contract(
-      latestSetState.challengeRegistryAddress,
+      latestSetState!.challengeRegistryAddress,
       ChallengeRegistry.abi,
       provider,
     );
-    const onchainChallenge = await registry.functions.getAppChallenge(appIdentityHash);
-    if (onchainChallenge.versionNumber.eq(latestSetState.versionNumber)) {
+    const onchainChallenge = await registry.getAppChallenge(appIdentityHash);
+    if (onchainChallenge.versionNumber.eq(latestSetState!.versionNumber)) {
       return;
     }
 
@@ -787,7 +726,7 @@ export class CFCoreStore implements IStoreService {
           timeout,
           turnTaker,
           signature,
-        } = registry.interface.parseLog(log).values;
+        } = registry.interface.parseLog(log).args;
         return { identityHash, action, versionNumber, timeout, turnTaker, signature };
       })
       .sort((a, b) => b.versionNumber.sub(a.versionNumber).toNumber());
@@ -800,10 +739,10 @@ export class CFCoreStore implements IStoreService {
     } = onchainProgressedLogs[0];
 
     // ensure action from event can be applied on top of our app
-    if (!versionNumber.eq(app.latestVersionNumber + 1)) {
+    if (!versionNumber.eq(app!.latestVersionNumber + 1)) {
       throw new Error(
         `Action cannot be applied directly onto our record of app. Record has nonce of ${
-          app.latestVersionNumber
+          app!.latestVersionNumber
         }, and action results in nonce ${versionNumber.toString()}`,
       );
     }
@@ -814,7 +753,7 @@ export class CFCoreStore implements IStoreService {
     // for the initiator). This means there will NOT be an app instance
     // saved at the same nonce as the most recent single signed set-state
     // commitment
-    const appSigners = [app.initiatorIdentifier, app.responderIdentifier].map(
+    const appSigners = [app!.initiatorIdentifier, app!.responderIdentifier].map(
       getSignerAddressFromPublicIdentifier,
     );
     const turnTakerIdx = appSigners.findIndex((signer) => signer === turnTaker);
@@ -842,7 +781,7 @@ export class CFCoreStore implements IStoreService {
         .createQueryBuilder()
         .update(AppInstance)
         .set({
-          latestAction: defaultAbiCoder.decode([app.actionEncoding], encodedAction),
+          latestAction: defaultAbiCoder.decode([app!.actionEncoding], encodedAction),
         })
         .where("app.identityHash = :appIdentityHash", {
           appIdentityHash,
@@ -876,16 +815,16 @@ export class CFCoreStore implements IStoreService {
             app,
             signatures,
             appIdentity: {
-              channelNonce: toBN(app.appSeqNo),
+              channelNonce: toBN(app!.appSeqNo),
               participants: appSigners,
               multisigAddress: channel.multisigAddress,
-              appDefinition: app.appDefinition,
-              defaultTimeout: toBN(app.defaultTimeout),
+              appDefinition: app!.appDefinition,
+              defaultTimeout: toBN(app!.defaultTimeout),
             },
             appStateHash: onchainChallenge.appStateHash,
             versionNumber: onchainChallenge.versionNumber,
             stateTimeout: timeout.toString(),
-            challengeRegistryAddress: latestSetState.challengeRegistryAddress,
+            challengeRegistryAddress: latestSetState!.challengeRegistryAddress,
           })
           .execute();
       }
@@ -897,8 +836,15 @@ export class CFCoreStore implements IStoreService {
     // safe to throw here because challenges should never be created from a
     // `StateProgressed` event, must always go through the set state game
     const challenge = await this.challengeRepository.findByIdentityHashOrThrow(identityHash);
+    if (!challenge.app.actionEncoding) {
+      throw new Error(
+        `App associated with state progressed event does not have action encoding. Event: ${stringify(
+          event,
+        )}`,
+      );
+    }
     const entity = new StateProgressedEvent();
-    entity.action = defaultAbiCoder.decode([challenge.app.actionEncoding!], action);
+    entity.action = defaultAbiCoder.decode([challenge.app.actionEncoding], action)[0];
     entity.challenge = challenge;
     entity.signature = signature;
     entity.timeout = timeout;
@@ -944,8 +890,16 @@ export class CFCoreStore implements IStoreService {
   ): Promise<ChallengeUpdatedEventPayload[]> {
     const challenge = await this.challengeRepository.findByIdentityHashOrThrow(appIdentityHash);
 
-    return challenge.challengeUpdatedEvents.map((event) =>
-      entityToChallengeUpdatedPayload(event, challenge),
+    return challenge.challengeUpdatedEvents.map(
+      (event) => entityToChallengeUpdatedPayload(event, challenge)!,
     );
+  }
+
+  private canonicalizeOwners(owners: string[]) {
+    if (owners.length !== 2) {
+      throw new Error("sanity error - must have 2 owners");
+    }
+
+    return owners.sort().join(":");
   }
 }

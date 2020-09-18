@@ -4,7 +4,7 @@ import { waffle as buidler } from "@nomiclabs/buidler";
 import * as chai from "chai";
 import { solidity } from "ethereum-waffle";
 import { use } from "chai";
-import { constants, utils } from "ethers";
+import { BigNumber, constants, utils } from "ethers";
 
 const { HashZero, Zero } = constants;
 const { defaultAbiCoder, keccak256, solidityPack } = utils;
@@ -15,6 +15,10 @@ use(solidity);
 export const expect = chai.use(solidity).expect;
 
 export const provider = buidler.provider;
+
+export const mkAddress = (prefix: string = "0xa") : string => {
+  return prefix.padEnd(42, "0");
+}
 
 export const mineBlocks = async (n: number = 1) => {
   for (let i = 0; i < n; i++) {
@@ -54,7 +58,7 @@ export const emptyChallenge = {
 
 // App State With Action types for testing
 export type AppWithCounterState = {
-  counter: utils.BigNumber;
+  counter: BigNumber;
 };
 
 export const encodeState = (state: AppWithCounterState) => {
@@ -68,7 +72,7 @@ export enum ActionType {
 
 export type AppWithCounterAction = {
   actionType: ActionType;
-  increment: utils.BigNumber;
+  increment: BigNumber;
 };
 
 export const encodeAction = (action: AppWithCounterAction) => {

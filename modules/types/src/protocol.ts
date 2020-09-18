@@ -1,34 +1,22 @@
-import { AppInterface, AppABIEncodings } from "./app";
-import { Address, BigNumber, Bytes32, AssetId, PublicIdentifier, SolidityValueType } from "./basic";
+import { AppABIEncodings, AppInstanceJson } from "./app";
+import {
+  Address,
+  BigNumber,
+  Bytes32,
+  AssetId,
+  PublicIdentifier,
+  SolidityValueType,
+  HexString,
+} from "./basic";
 import { OutcomeType } from "./contracts";
 import { enumify } from "./utils";
 
 type InstallProtocolParams = {
-  identityHash: Bytes32;
-  initiatorIdentifier: PublicIdentifier;
-  initiatorDepositAssetId: Address;
-  responderIdentifier: PublicIdentifier;
-  responderDepositAssetId: Address;
+  initiatorIdentifier: PublicIdentifier; // protocol-specific
+  responderIdentifier: PublicIdentifier; // protocol-specific
+  proposal: AppInstanceJson;
   multisigAddress: Address;
-  initiatorBalanceDecrement: BigNumber;
-  responderBalanceDecrement: BigNumber;
-  initialState: SolidityValueType;
-  appInterface: AppInterface;
-  meta?: Object;
-  defaultTimeout: BigNumber;
-  stateTimeout: BigNumber;
-  appSeqNo: number;
-  // Outcome Type returned by the app instance, as defined by `appInterface`
-  outcomeType: OutcomeType;
-  // By default, the SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER interpreter params
-  // contains a "limit" that is computed as
-  // `initiatorBalanceDecrement + responderBalanceDecrement`; setting this
-  // flag disables the limit by setting it to MAX_UINT256
-  disableLimit: boolean;
-  // these are set during the proposal for the app instance
-  // set state commitment generation
-  appInitiatorIdentifier: string;
-  appResponderIdentifier: string;
+  protocolMeta?: any;
 };
 
 type ProposeProtocolParams = {
@@ -45,19 +33,28 @@ type ProposeProtocolParams = {
   stateTimeout: BigNumber; // optional in api, but should be defined in protocol
   initialState: SolidityValueType;
   outcomeType: OutcomeType;
-  meta?: Object;
+  meta?: any;
+  protocolMeta?: any;
 };
 
 type SetupProtocolParams = {
   initiatorIdentifier: PublicIdentifier;
   responderIdentifier: PublicIdentifier;
   multisigAddress: Address;
+  chainId: number;
+  protocolMeta?: any;
 };
 
+// NOTE: should only provide the appIdentityHash if the protocol
+// also provides it in the params. These include:
+// - takeAction
+// - uninstall
 type SyncProtocolParams = {
   initiatorIdentifier: PublicIdentifier;
   responderIdentifier: PublicIdentifier;
   multisigAddress: Address;
+  appIdentityHash: HexString | undefined;
+  protocolMeta?: any;
 };
 
 type TakeActionProtocolParams = {
@@ -67,6 +64,7 @@ type TakeActionProtocolParams = {
   appIdentityHash: Address;
   action: SolidityValueType;
   stateTimeout: BigNumber;
+  protocolMeta?: any;
 };
 
 type UninstallProtocolParams = {
@@ -77,6 +75,7 @@ type UninstallProtocolParams = {
   blockNumberToUseIfNecessary?: number;
   action?: SolidityValueType;
   stateTimeout?: BigNumber;
+  protocolMeta?: any;
 };
 
 ////////////////////////////////////////

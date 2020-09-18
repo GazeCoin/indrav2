@@ -1,10 +1,8 @@
 import { MinimalTransaction } from "@connext/types";
-import { utils } from "ethers";
+import { BigNumber } from "ethers";
 import { EntityRepository, Repository } from "typeorm";
 
 import { SetupCommitment } from "./setupCommitment.entity";
-
-const { bigNumberify } = utils;
 
 export const convertSetupEntityToMinimalTransaction = (commitment: SetupCommitment) => {
   return {
@@ -16,7 +14,7 @@ export const convertSetupEntityToMinimalTransaction = (commitment: SetupCommitme
 
 @EntityRepository(SetupCommitment)
 export class SetupCommitmentRepository extends Repository<SetupCommitment> {
-  findByMultisigAddress(multisigAddress: string): Promise<SetupCommitment> {
+  findByMultisigAddress(multisigAddress: string): Promise<SetupCommitment | undefined> {
     return this.findOne({
       where: { multisigAddress },
       relations: ["channel"],
@@ -31,7 +29,7 @@ export class SetupCommitmentRepository extends Repository<SetupCommitment> {
     return setupCommitment;
   }
 
-  async getCommitment(multisigAddress: string): Promise<MinimalTransaction> {
+  async getCommitment(multisigAddress: string): Promise<MinimalTransaction | undefined> {
     const setup = await this.findByMultisigAddress(multisigAddress);
     if (!setup) {
       return undefined;
@@ -46,7 +44,7 @@ export class SetupCommitmentRepository extends Repository<SetupCommitment> {
     const commitmentEnt = new SetupCommitment();
     commitmentEnt.multisigAddress = multisigAddress;
     commitmentEnt.to = commitment.to;
-    commitmentEnt.value = bigNumberify(commitment.value);
+    commitmentEnt.value = BigNumber.from(commitment.value);
     commitmentEnt.data = commitment.data;
     return this.save(commitmentEnt);
   }

@@ -1,13 +1,16 @@
 import {
-  IChannelSigner,
-  ILoggerService,
   MethodNames,
   MethodParams,
   MethodResults,
-  NetworkContext,
-  PublicIdentifier,
+  MinimalTransaction,
+  TransactionReceipt,
 } from "@connext/types";
-import { delay, getSignerAddressFromPublicIdentifier, stringify } from "@connext/utils";
+import {
+  delay,
+  getGasPrice,
+  getSignerAddressFromPublicIdentifier,
+  stringify,
+} from "@connext/utils";
 import { Contract, Signer, utils, constants, providers } from "ethers";
 
 import {
@@ -17,6 +20,7 @@ import {
   INVALID_FACTORY_ADDRESS,
   INVALID_MASTERCOPY_ADDRESS,
   NO_STATE_CHANNEL_FOR_MULTISIG_ADDR,
+  NO_NETWORK_PROVIDER_FOR_CHAIN_ID,
 } from "../../errors";
 import { MinimumViableMultisig, ProxyFactory } from "../../contracts";
 import { StateChannel } from "../../models";
@@ -25,183 +29,213 @@ import { getCreate2MultisigAddress } from "../../utils";
 
 import { MethodController } from "../controller";
 
-const { HashZero } = constants;
+const { HashZero, Zero } = constants;
 const { Interface, solidityKeccak256 } = utils;
 
 // Estimate based on rinkeby transaction:
 // 0xaac429aac389b6fccc7702c8ad5415248a5add8e8e01a09a42c4ed9733086bec
 const CREATE_PROXY_AND_SETUP_GAS = 500_000;
 
+let memoryNonce = 0;
+
 export class DeployStateDepositController extends MethodController {
   public readonly methodName = MethodNames.chan_deployStateDepositHolder;
+  private inProgress: { [multisig: string]: boolean } = {};
 
   public executeMethod = super.executeMethod;
 
   protected async beforeExecution(
     requestHandler: RequestHandler,
     params: MethodParams.DeployStateDepositHolder,
-  ): Promise<void> {
-    const { store, networkContext } = requestHandler;
+    preProtocolStateChannel: StateChannel,
+  ): Promise<MethodResults.DeployStateDepositHolder | undefined> {
+    const { networkContexts } = requestHandler;
     const { multisigAddress } = params;
 
-    const json = await store.getStateChannel(multisigAddress);
-    if (!json) {
+    if (!preProtocolStateChannel) {
       throw new Error(NO_STATE_CHANNEL_FOR_MULTISIG_ADDR(multisigAddress));
     }
-    const channel = StateChannel.fromJson(json);
 
-    if (!channel.addresses.ProxyFactory) {
-      throw new Error(INVALID_FACTORY_ADDRESS(channel.addresses.ProxyFactory));
+    if (!preProtocolStateChannel.addresses.ProxyFactory) {
+      throw new Error(INVALID_FACTORY_ADDRESS(preProtocolStateChannel.addresses.ProxyFactory));
     }
 
-    if (!channel.addresses.MinimumViableMultisig) {
-      throw new Error(INVALID_MASTERCOPY_ADDRESS(channel.addresses.MinimumViableMultisig));
+    if (!preProtocolStateChannel.addresses.MinimumViableMultisig) {
+      throw new Error(
+        INVALID_MASTERCOPY_ADDRESS(preProtocolStateChannel.addresses.MinimumViableMultisig),
+      );
+    }
+
+    const networkContext = networkContexts[preProtocolStateChannel.chainId];
+
+    if (!networkContext?.provider) {
+      throw new Error(NO_NETWORK_PROVIDER_FOR_CHAIN_ID(preProtocolStateChannel.chainId));
     }
 
     const expectedMultisigAddress = await getCreate2MultisigAddress(
-      channel.userIdentifiers[0],
-      channel.userIdentifiers[1],
-      channel.addresses,
+      preProtocolStateChannel.userIdentifiers[0],
+      preProtocolStateChannel.userIdentifiers[1],
+      preProtocolStateChannel.addresses,
       networkContext.provider,
     );
 
-    if (expectedMultisigAddress !== channel.multisigAddress) {
+    if (expectedMultisigAddress !== preProtocolStateChannel.multisigAddress) {
       throw new Error(INCORRECT_MULTISIG_ADDRESS);
     }
+    return undefined;
   }
 
   protected async executeMethodImplementation(
     requestHandler: RequestHandler,
     params: MethodParams.DeployStateDepositHolder,
+    preProtocolStateChannel: StateChannel,
   ): Promise<MethodResults.DeployStateDepositHolder> {
-    const { multisigAddress, retryCount } = params;
-    const { log, networkContext, store, signer } = requestHandler;
+    const multisigAddress = params.multisigAddress;
+    const retryCount = params.retryCount || 1;
+    const { networkContexts, signer, transactionService } = requestHandler;
+    const log = requestHandler.log.newContext("CF-DeployStateDepositHolder");
+    const networkContext = networkContexts[preProtocolStateChannel.chainId];
 
-    // By default, if the contract has been deployed and
-    // DB has records of it, controller will return HashZero
-    let tx = { hash: HashZero } as providers.TransactionResponse;
+    // No need to re-assert what we already asserted in beforeExecution
 
-    const json = await store.getStateChannel(multisigAddress);
-    if (!json) {
-      throw new Error(NO_STATE_CHANNEL_FOR_MULTISIG_ADDR(multisigAddress));
+    if (!signer.provider || !Signer.isSigner(signer)) {
+      throw new Error(`Signer must be connected to provider`);
     }
-    const channel = StateChannel.fromJson(json);
+    const provider = networkContext.provider!;
+    await signer.connectProvider(provider);
 
-    // make sure it is deployed to the right address
-    const expectedMultisigAddress = await getCreate2MultisigAddress(
-      channel.userIdentifiers[0],
-      channel.userIdentifiers[1],
-      channel.addresses,
-      networkContext.provider,
+    // If this is called twice concurrently, the second attempt should wait until the first is done
+    if (this.inProgress[multisigAddress]) {
+      log.warn(`Another deployment is in progress`);
+      await new Promise(async (res) => {
+        while (true) {
+          if (
+            !this.inProgress[multisigAddress] ||
+            (await provider.getCode(multisigAddress)) !== "0x"
+          ) {
+            log.info(`Other deployment completed`);
+            return res();
+          } else {
+            await delay(2_000);
+          }
+        }
+      });
+    }
+
+    if ((await provider.getCode(multisigAddress)) !== `0x`) {
+      // Multisig has already been deployed
+      return { transactionHash: HashZero };
+    }
+
+    // Get ready for multisig deployment
+    this.inProgress[multisigAddress] = true;
+
+    // Create proxy factory + tx data
+    const proxyFactory = new Contract(
+      preProtocolStateChannel.addresses.ProxyFactory,
+      ProxyFactory.abi,
+      signer,
     );
+    const data = await proxyFactory.interface.encodeFunctionData("createProxyWithNonce", [
+      networkContext.contractAddresses.MinimumViableMultisig,
+      new Interface(MinimumViableMultisig.abi).encodeFunctionData("setup", [
+        preProtocolStateChannel.multisigOwners,
+      ]),
+      // hash chainId plus nonce for x-chain replay protection
+      solidityKeccak256(["uint256", "uint256"], [preProtocolStateChannel.chainId, 0]),
+    ]);
+    const minTx: MinimalTransaction = {
+      data,
+      value: Zero,
+      to: proxyFactory.address,
+    };
 
-    if (expectedMultisigAddress !== channel.multisigAddress) {
-      throw new Error(INCORRECT_MULTISIG_ADDRESS);
+    // If available, send using transaction service
+    let receipt: TransactionReceipt | undefined = undefined;
+    let error: any;
+    if (transactionService) {
+      log.info("Sending multisig deployment transaction using transaction service");
+      const response = await transactionService.sendTransaction(
+        minTx,
+        preProtocolStateChannel.chainId,
+        preProtocolStateChannel.multisigAddress,
+      );
+      receipt = await response.wait();
+    } else {
+      // try with nonce retry logic
+      for (let tryCount = 1; tryCount <= retryCount; tryCount += 1) {
+        // Handle nonce issues within reatry loop (see catch statement)
+        try {
+          const chainNonce = await provider.getTransactionCount(await signer.getAddress());
+          const nonce = chainNonce > memoryNonce ? chainNonce : memoryNonce;
+          log.debug(`chainNonce ${chainNonce} vs memoryNonce ${memoryNonce}`);
+          memoryNonce = nonce;
+
+          const tx: providers.TransactionResponse = await signer.sendTransaction({
+            ...minTx,
+            gasLimit: CREATE_PROXY_AND_SETUP_GAS,
+            gasPrice: getGasPrice(provider),
+            nonce,
+          });
+          memoryNonce = nonce + 1;
+
+          if (!tx.hash) {
+            throw new Error(`${NO_TRANSACTION_HASH_FOR_MULTISIG_DEPLOYMENT}: ${stringify(tx)}`);
+          }
+          log.info(`Sent multisig deployment tx, waiting for tx hash: ${tx.hash}`);
+          receipt = await tx.wait();
+          log.info(`Done waiting for tx hash: ${tx.hash}`);
+          break;
+        } catch (e) {
+          const message = e?.body?.error?.message || e.message;
+          log.warn(message);
+          if (message.includes("the tx doesn't have the correct nonce")) {
+            log.warn(`Nonce conflict, trying again real quick: ${message}`);
+            tryCount -= 1; // Nonce conflicts don't count as retrys bc no gas spent
+            memoryNonce = parseInt(message.match(/account has nonce of: (\d+)/)[1], 10);
+            continue;
+          }
+          if (message.includes("Invalid nonce")) {
+            log.warn(`Nonce conflict, trying again real quick: ${message}`);
+            tryCount -= 1; // Nonce conflicts don't count as retrys bc no gas spent
+            memoryNonce = parseInt(message.match(/Expected (\d+)/)[1], 10);
+            continue;
+          }
+          error = e;
+          log.error(`Deployment attempt ${tryCount} failed: ${message}`);
+          log.warn(`Retrying ${retryCount - tryCount} more times`);
+        }
+      }
+    }
+    if (!receipt) {
+      throw new Error(`${CHANNEL_CREATION_FAILED}: Unable to deploy multisig`);
     }
 
-    // Check if the contract has already been deployed on-chain
-    if ((await networkContext.provider.getCode(multisigAddress)) === `0x`) {
-      tx = await sendMultisigDeployTx(signer, channel, networkContext, retryCount, log);
+    if (error) {
+      throw new Error(`${CHANNEL_CREATION_FAILED}: ${stringify(error)}`);
     }
 
-    return { transactionHash: tx.hash! };
-  }
-}
+    const multisig = new Contract(
+      preProtocolStateChannel.multisigAddress,
+      MinimumViableMultisig.abi,
+      provider,
+    );
+    const expectedOwners = [
+      getSignerAddressFromPublicIdentifier(preProtocolStateChannel.userIdentifiers[0]),
+      getSignerAddressFromPublicIdentifier(preProtocolStateChannel.userIdentifiers[1]),
+    ];
+    const actualOwners = await multisig.getOwners();
 
-async function sendMultisigDeployTx(
-  signer: IChannelSigner,
-  stateChannel: StateChannel,
-  networkContext: NetworkContext,
-  retryCount: number = 1,
-  log: ILoggerService,
-): Promise<providers.TransactionResponse> {
-  if (!signer.provider || !Signer.isSigner(signer)) {
-    throw new Error(`Signer must be connected to provider`);
-  }
-  const provider = signer.provider!;
-
-  // make sure that the proxy factory used to deploy is the same as the one
-  // used when the channel was created
-  const proxyFactory = new Contract(stateChannel.addresses.ProxyFactory, ProxyFactory.abi, signer);
-
-  const owners = stateChannel.userIdentifiers;
-
-  const signerAddress = await signer.getAddress();
-
-  let error;
-  for (let tryCount = 1; tryCount < retryCount + 1; tryCount += 1) {
-    try {
-      const tx: providers.TransactionResponse = await proxyFactory.functions.createProxyWithNonce(
-        networkContext.contractAddresses.MinimumViableMultisig,
-        new Interface(MinimumViableMultisig.abi).functions.setup.encode([
-          stateChannel.multisigOwners,
-        ]),
-        // hash chainId plus nonce for x-chain replay protection
-        solidityKeccak256(["uint256", "uint256"], [(await provider.getNetwork()).chainId, 0]), // TODO: Increment nonce as needed
-        {
-          gasLimit: CREATE_PROXY_AND_SETUP_GAS,
-          gasPrice: provider.getGasPrice(),
-          nonce: provider.getTransactionCount(signerAddress),
-        },
-      );
-
-      if (!tx.hash) {
-        throw new Error(`${NO_TRANSACTION_HASH_FOR_MULTISIG_DEPLOYMENT}: ${stringify(tx)}`);
-      }
-      log.info(`Sent multisig deployment tx, waiting for tx hash: ${tx.hash}`);
-      await tx.wait();
-      log.info(`Done waiting for tx hash: ${tx.hash}`);
-
-      const ownersAreCorrectlySet = await checkForCorrectOwners(
-        tx!,
-        provider as providers.JsonRpcProvider,
-        owners,
-        stateChannel.multisigAddress,
-      );
-
-      if (!ownersAreCorrectlySet) {
-        log.error(
-          `${CHANNEL_CREATION_FAILED}: Could not confirm, on the ${tryCount} try, that the deployed multisig contract has the expected owners`,
-        );
-        // wait on a linear backoff interval before retrying
-        await delay(1000 * tryCount);
-        continue;
-      }
-
-      if (tryCount > 1) {
-        log.debug(`Deploying multisig failed on first try, but succeeded on try #${tryCount}`);
-      }
-      log.info(`Multisig deployment complete for ${stateChannel.multisigAddress}`);
-      return tx;
-    } catch (e) {
-      error = e;
-      log.error(
-        `Channel creation attempt ${tryCount} failed: ${e}.\n Retrying ${
-          retryCount - tryCount
-        } more times`,
+    if (!(expectedOwners[0] === actualOwners[0] && expectedOwners[1] === actualOwners[1])) {
+      // wait on a linear backoff interval before retrying
+      throw new Error(
+        `${CHANNEL_CREATION_FAILED}: Could not confirm that the deployed multisig has the expected owners`,
       );
     }
+
+    log.info(`Multisig deployment complete for ${preProtocolStateChannel.multisigAddress}`);
+
+    this.inProgress[multisigAddress] = false;
+    return { transactionHash: receipt.transactionHash };
   }
-
-  throw new Error(`${CHANNEL_CREATION_FAILED}: ${stringify(error)}`);
-}
-
-async function checkForCorrectOwners(
-  tx: providers.TransactionResponse,
-  provider: providers.JsonRpcProvider,
-  identifiers: PublicIdentifier[], // [initiator, responder]
-  multisigAddress: string,
-): Promise<boolean> {
-  await tx.wait();
-
-  const contract = new Contract(multisigAddress, MinimumViableMultisig.abi as any, provider);
-
-  const expectedOwners = [
-    getSignerAddressFromPublicIdentifier(identifiers[0]),
-    getSignerAddressFromPublicIdentifier(identifiers[1]),
-  ];
-
-  const actualOwners = await contract.functions.getOwners();
-
-  return expectedOwners[0] === actualOwners[0] && expectedOwners[1] === actualOwners[1];
 }

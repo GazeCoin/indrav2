@@ -1,7 +1,7 @@
 import { IConnextClient } from "@connext/types";
 import { ColorfulLogger } from "@connext/utils";
 import { ERC20 } from "@connext/contracts";
-import { Contract, Wallet, constants, utils } from "ethers";
+import { BigNumber, Contract, Wallet, constants } from "ethers";
 
 import { env } from "../env";
 import { expect } from "../";
@@ -11,14 +11,14 @@ const { AddressZero } = constants;
 
 export const withdrawFromChannel = async (
   client: IConnextClient,
-  amount: utils.BigNumber,
+  amount: BigNumber,
   assetId: string,
   recipient: string = Wallet.createRandom().address,
 ): Promise<void> => {
   // try to withdraw
   const preWithdrawalBalance = await client.getFreeBalance(assetId);
   const expected = preWithdrawalBalance[client.signerAddress].sub(amount);
-  const log = new ColorfulLogger("WithdrawFromChannel", env.logLevel);
+  const log = new ColorfulLogger("WithdrawFromChannel", env.logLevel, false, "H");
   log.info(`client.withdraw() called`);
   const start = Date.now();
   const { transaction } = await client.withdraw({
@@ -28,11 +28,15 @@ export const withdrawFromChannel = async (
   });
   log.info(`client.withdraw() returned in ${Date.now() - start}ms`);
   const postWithdrawalBalance = await client.getFreeBalance(assetId);
-  let recipientBalance: utils.BigNumber;
+  let recipientBalance: BigNumber;
   if (assetId === AddressZero) {
     recipientBalance = await ethProvider.getBalance(recipient);
   } else {
-    const token = new Contract(client.config.contractAddresses.Token!, ERC20.abi, ethProvider);
+    const token = new Contract(
+      client.config.contractAddresses[client.chainId].Token!,
+      ERC20.abi,
+      ethProvider,
+    );
     recipientBalance = await token.balanceOf(recipient);
   }
   expect(recipientBalance).to.be.at.least(amount.toString());

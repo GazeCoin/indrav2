@@ -1,8 +1,8 @@
 import { Ctx } from "evt";
-import { providers } from "ethers";
+import { BigNumber, providers } from "ethers";
 
-import { AppInstanceProposal, AppInstanceJson } from "./app";
-import { Address, BigNumber, Bytes32, PublicIdentifier, SolidityValueType } from "./basic";
+import { AppInstanceJson } from "./app";
+import { Address, Bytes32, PublicIdentifier, SolidityValueType } from "./basic";
 import {
   ConditionalTransferTypes,
   CreatedConditionalTransferMetaMap,
@@ -13,10 +13,14 @@ import { ProtocolMessageData } from "./messaging";
 import { PublicParams } from "./public";
 import { MinimalTransaction } from "./commitments";
 import { StateChannelJSON } from "./state";
+import { WatcherEventData, WatcherEvents, WatcherEventDataMap } from "./watcher";
 
 type SignedTransfer = typeof ConditionalTransferTypes.SignedTransfer;
+type GraphTransfer = typeof ConditionalTransferTypes.GraphTransfer;
+type GraphBatchedTransfer = typeof ConditionalTransferTypes.GraphBatchedTransfer;
 type HashLockTransfer = typeof ConditionalTransferTypes.HashLockTransfer;
 type LinkedTransfer = typeof ConditionalTransferTypes.LinkedTransfer;
+type OnlineTransfer = typeof ConditionalTransferTypes.OnlineTransfer;
 
 ////////////////////////////////////////
 const CONDITIONAL_TRANSFER_CREATED_EVENT = "CONDITIONAL_TRANSFER_CREATED_EVENT";
@@ -102,6 +106,8 @@ const INSTALL_EVENT = "INSTALL_EVENT";
 
 type InstallEventData = {
   appIdentityHash: Bytes32;
+  appInstance: AppInstanceJson;
+  protocolMeta?: any;
 };
 
 const INSTALL_FAILED_EVENT = "INSTALL_FAILED_EVENT";
@@ -117,6 +123,7 @@ const PROPOSE_INSTALL_EVENT = "PROPOSE_INSTALL_EVENT";
 type ProposeEventData = {
   params: ProtocolParams.Propose;
   appInstanceId: string;
+  protocolMeta?: any;
 };
 
 const PROPOSE_INSTALL_FAILED_EVENT = "PROPOSE_INSTALL_FAILED_EVENT";
@@ -133,7 +140,8 @@ const PROTOCOL_MESSAGE_EVENT = "PROTOCOL_MESSAGE_EVENT";
 const REJECT_INSTALL_EVENT = "REJECT_INSTALL_EVENT";
 
 type RejectInstallEventData = {
-  appInstance: AppInstanceProposal;
+  appInstance: AppInstanceJson;
+  reason?: string;
 };
 
 ////////////////////////////////////////
@@ -144,6 +152,7 @@ type UninstallEventData = {
   multisigAddress: string;
   uninstalledApp: AppInstanceJson;
   action?: SolidityValueType;
+  protocolMeta?: any;
 };
 
 const UNINSTALL_FAILED_EVENT = "UNINSTALL_FAILED_EVENT";
@@ -160,6 +169,7 @@ type UpdateStateEventData = {
   appIdentityHash: Bytes32;
   newState: SolidityValueType;
   action?: SolidityValueType;
+  protocolMeta?: any;
 };
 
 const UPDATE_STATE_FAILED_EVENT = "UPDATE_STATE_FAILED_EVENT";
@@ -173,7 +183,7 @@ type UpdateStateFailedEventData = {
 const WITHDRAWAL_CONFIRMED_EVENT = "WITHDRAWAL_CONFIRMED_EVENT";
 
 type WithdrawalConfirmedEventData = {
-  transaction: providers.TransactionResponse;
+  transaction: providers.TransactionReceipt;
 };
 
 ////////////////////////////////////////
@@ -206,15 +216,15 @@ type SyncFailedEventData = {
   error: string;
 };
 
-interface EventPayloadMap {
+interface EventPayloadMap extends WatcherEventDataMap {
   [CONDITIONAL_TRANSFER_CREATED_EVENT]: ConditionalTransferCreatedEventData<
-    HashLockTransfer | LinkedTransfer | SignedTransfer
+    HashLockTransfer | LinkedTransfer | SignedTransfer | GraphTransfer | GraphBatchedTransfer
   >;
   [CONDITIONAL_TRANSFER_UNLOCKED_EVENT]: ConditionalTransferUnlockedEventData<
-    HashLockTransfer | LinkedTransfer | SignedTransfer
+    HashLockTransfer | LinkedTransfer | SignedTransfer | GraphTransfer | GraphBatchedTransfer
   >;
   [CONDITIONAL_TRANSFER_FAILED_EVENT]: ConditionalTransferFailedEventData<
-    HashLockTransfer | LinkedTransfer | SignedTransfer
+    HashLockTransfer | LinkedTransfer | SignedTransfer | GraphTransfer | GraphBatchedTransfer
   >;
   [CREATE_CHANNEL_EVENT]: CreateMultisigEventData;
   [SETUP_FAILED_EVENT]: SetupFailedEventData;
@@ -265,7 +275,7 @@ export const EventNames = {
   [WITHDRAWAL_FAILED_EVENT]: WITHDRAWAL_FAILED_EVENT,
   [WITHDRAWAL_STARTED_EVENT]: WITHDRAWAL_STARTED_EVENT,
 } as const;
-export type EventName = keyof typeof EventNames;
+export type EventName = keyof typeof EventNames | keyof typeof WatcherEvents;
 export type EventPayload = {
   [P in keyof EventPayloadMap]: EventPayloadMap[P];
 };
@@ -315,20 +325,30 @@ export namespace EventPayloads {
   export type HashLockTransferCreated = ConditionalTransferCreatedEventData<HashLockTransfer>;
   export type LinkedTransferCreated = ConditionalTransferCreatedEventData<LinkedTransfer>;
   export type SignedTransferCreated = ConditionalTransferCreatedEventData<SignedTransfer>;
+  export type GraphTransferCreated = ConditionalTransferCreatedEventData<GraphTransfer>;
+  export type GraphBatchedTransferCreated = ConditionalTransferCreatedEventData<
+    GraphBatchedTransfer
+  >;
   export type HashLockTransferUnlocked = ConditionalTransferUnlockedEventData<HashLockTransfer>;
   export type LinkedTransferUnlocked = ConditionalTransferUnlockedEventData<LinkedTransfer>;
   export type SignedTransferUnlocked = ConditionalTransferUnlockedEventData<SignedTransfer>;
+  export type GraphTransferUnlocked = ConditionalTransferUnlockedEventData<GraphTransfer>;
+  export type GraphBatchedTransferUnlocked = ConditionalTransferUnlockedEventData<
+    GraphBatchedTransfer
+  >;
   export type HashLockTransferFailed = ConditionalTransferFailedEventData<HashLockTransfer>;
   export type LinkedTransferFailed = ConditionalTransferFailedEventData<LinkedTransfer>;
   export type SignedTransferFailed = ConditionalTransferFailedEventData<SignedTransfer>;
+  export type GraphTransferFailed = ConditionalTransferFailedEventData<GraphTransfer>;
+  export type GraphBatchedTransferFailed = ConditionalTransferFailedEventData<GraphBatchedTransfer>;
   export type ConditionalTransferCreated<T> = ConditionalTransferCreatedEventData<
-    HashLockTransfer | LinkedTransfer | SignedTransfer
+    HashLockTransfer | LinkedTransfer | SignedTransfer | GraphTransfer | GraphBatchedTransfer
   >;
   export type ConditionalTransferUnlocked<T> = ConditionalTransferUnlockedEventData<
-    HashLockTransfer | LinkedTransfer | SignedTransfer
+    HashLockTransfer | LinkedTransfer | SignedTransfer | GraphTransfer | GraphBatchedTransfer
   >;
   export type ConditionalTransferFailed<T> = ConditionalTransferFailedEventData<
-    HashLockTransfer | LinkedTransfer | SignedTransfer
+    HashLockTransfer | LinkedTransfer | SignedTransfer | GraphTransfer | GraphBatchedTransfer
   >;
   export type DepositStarted = DepositStartedEventData;
   export type DepositConfirmed = DepositConfirmedEventData;

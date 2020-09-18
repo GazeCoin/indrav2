@@ -9,6 +9,7 @@ import {
   Network,
   NodeResponses,
   IMessagingService,
+  IWatcher,
 } from "@connext/types";
 import { providers } from "ethers";
 
@@ -17,6 +18,7 @@ export type InternalClientOptions = {
   channelProvider: IChannelProvider;
   config: NodeResponses.GetConfig;
   ethProvider: providers.JsonRpcProvider;
+  chainId: number;
   logger: ILoggerService;
   messaging: IMessagingService;
   network: Network;
@@ -24,4 +26,5 @@ export type InternalClientOptions = {
   signer: IChannelSigner;
   store: IStoreService;
   token: Contract;
+  watcher: IWatcher;
 };

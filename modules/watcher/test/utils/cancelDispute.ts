@@ -1,48 +1,36 @@
 import { AppWithCounterClass } from "./appWithCounter";
 import { Watcher } from "../../src";
-import {
-  IWatcherStoreService,
-  WatcherEvents,
-  ChallengeCancellationFailedEventData,
-  ChallengeCancelledEventData,
-  ChallengeUpdatedEventData,
-} from "@connext/types";
+import { IStoreService, WatcherEvents } from "@connext/types";
 import { expect, nullify, verifyCancelChallenge } from ".";
 
 export const cancelDispute = async (
   app: AppWithCounterClass,
   watcher: Watcher,
-  store: IWatcherStoreService,
+  store: IStoreService,
   failsWith: string | undefined = undefined,
 ) => {
   const existing = await store.getAppChallenge(app.identityHash);
   expect(existing).to.be.ok;
   const req = await app.getCancelDisputeRequest(existing!.versionNumber);
+  const watcherPromise = failsWith
+    ? watcher.waitFor(WatcherEvents.CHALLENGE_CANCELLATION_FAILED_EVENT, 10_000)
+    : watcher.waitFor(WatcherEvents.CHALLENGE_CANCELLED_EVENT, 10_000);
+
+  const contractPromise = failsWith
+    ? Promise.resolve()
+    : watcher.waitFor(
+        WatcherEvents.CHALLENGE_UPDATED_EVENT,
+        10_000,
+        (data) => data.identityHash === app.identityHash,
+      );
   const [watcherEvent, challengeUpdated, watcherRes] = await Promise.all([
-    new Promise((resolve) => {
-      watcher.once(
-        WatcherEvents.ChallengeCancellationFailedEvent,
-        async (data: ChallengeCancellationFailedEventData) => resolve(data),
-      );
-      watcher.once(
-        WatcherEvents.ChallengeCancelledEvent,
-        async (data: ChallengeCancelledEventData) => resolve(data),
-      );
-    }),
-    new Promise((resolve) => {
-      if (failsWith) {
-        resolve();
-      }
-      watcher.on(WatcherEvents.ChallengeUpdatedEvent, async (data: ChallengeUpdatedEventData) => {
-        if (data.identityHash === app.identityHash) {
-          resolve(data);
-        }
-      });
-    }),
+    watcherPromise,
+    contractPromise,
     new Promise(async (resolve, reject) => {
       try {
         const ret = await watcher.cancel(app.identityHash, req);
-        resolve(ret);
+        const receipt = await ret.wait();
+        resolve(receipt);
       } catch (e) {
         if (failsWith) {
           resolve(e.message);
@@ -52,6 +40,7 @@ export const cancelDispute = async (
       }
     }),
   ]);
+
   // verify watcher event + stored challenges
   const challenge = await store.getAppChallenge(app.identityHash);
   if (failsWith) {
@@ -66,7 +55,7 @@ export const cancelDispute = async (
     expect(challenge).to.containSubset(existing);
   } else {
     expect(watcherEvent).to.containSubset({
-      transaction: watcherRes as any,
+      transaction: watcherRes,
       appInstanceId: app.identityHash,
     });
     verifyCancelChallenge(app, challengeUpdated as any, challenge!);

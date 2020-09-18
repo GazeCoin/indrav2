@@ -1,22 +1,34 @@
-import { AppActions, AppStates, AppName, HexString, OutcomeType } from "@connext/types";
-import { utils } from "ethers";
 import {
-  Entity,
+  AppActions,
+  AppName,
+  AppStates,
+  HexString,
+  OutcomeType,
+  TwoPartyFixedOutcomeInterpreterParamsJson,
+  MultiAssetMultiPartyCoinTransferInterpreterParamsJson,
+  SingleAssetTwoPartyCoinTransferInterpreterParamsJson,
+} from "@connext/types";
+import { BigNumber } from "ethers";
+import {
   Column,
-  ManyToOne,
   CreateDateColumn,
-  UpdateDateColumn,
+  Entity,
+  ManyToOne,
   PrimaryColumn,
+  UpdateDateColumn,
+  OneToOne,
+  JoinColumn,
 } from "typeorm";
 
 import { Channel } from "../channel/channel.entity";
 import { IsEthAddress, IsKeccak256Hash, IsValidPublicIdentifier } from "../validate";
+import { transformBN } from "../utils";
+import { Transfer } from "../transfer/transfer.entity";
 
 export enum AppType {
   PROPOSAL = "PROPOSAL",
   INSTANCE = "INSTANCE",
   FREE_BALANCE = "FREE_BALANCE",
-  REJECTED = "REJECTED", // removed proposal
   UNINSTALLED = "UNINSTALLED", // removed app
 }
 
@@ -43,21 +55,13 @@ export class AppInstance<T extends AppName = any> {
   appSeqNo!: number;
 
   @Column("jsonb")
-  initialState!: AppStates[T];
-
-  @Column("jsonb")
   latestState!: AppStates[T];
 
   @Column("integer")
   latestVersionNumber!: number;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => new utils.BigNumber(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  initiatorDeposit!: utils.BigNumber;
+  @Column("text", { transformer: transformBN })
+  initiatorDeposit!: BigNumber;
 
   @Column("text")
   @IsEthAddress()
@@ -74,13 +78,8 @@ export class AppInstance<T extends AppName = any> {
   @IsValidPublicIdentifier()
   responderIdentifier!: string;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => new utils.BigNumber(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  responderDeposit!: utils.BigNumber;
+  @Column("text", { transformer: transformBN })
+  responderDeposit!: BigNumber;
 
   @Column("text")
   @IsEthAddress()
@@ -92,32 +91,29 @@ export class AppInstance<T extends AppName = any> {
   @Column("text", { nullable: true })
   stateTimeout!: HexString;
 
-  // assigned a value on installation not proposal
-  @Column("text", { nullable: true })
-  @IsValidPublicIdentifier()
-  userIdentifier?: string;
-
-  // assigned a value on installation not proposal
-  @Column("text", { nullable: true })
-  @IsValidPublicIdentifier()
-  nodeIdentifier?: string;
-
   @Column("jsonb", { nullable: true })
-  meta?: any;
+  meta!: any;
 
   @Column("jsonb", { nullable: true })
   latestAction!: AppActions[T];
 
-  // Interpreter-related Fields
-  @Column("jsonb", { nullable: true })
-  outcomeInterpreterParameters?: any;
+  @Column("jsonb")
+  outcomeInterpreterParameters!:
+    | TwoPartyFixedOutcomeInterpreterParamsJson
+    | MultiAssetMultiPartyCoinTransferInterpreterParamsJson
+    | SingleAssetTwoPartyCoinTransferInterpreterParamsJson
+    | {};
 
-  @ManyToOne((type: any) => Channel, (channel: Channel) => channel.appInstances)
+  @ManyToOne((type: any) => Channel, (channel: Channel) => channel.appInstances, { nullable: true })
   channel!: Channel;
 
+  @OneToOne((type: any) => Transfer, { nullable: true, cascade: true })
+  @JoinColumn()
+  transfer!: Transfer<T>;
+
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn()
-  updatedAt: Date;
+  updatedAt!: Date;
 }

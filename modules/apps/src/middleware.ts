@@ -2,16 +2,21 @@ import {
   Address,
   ContractAddresses,
   MiddlewareContext,
-  NetworkContext,
+  NetworkContexts,
   ProposeMiddlewareContext,
   ProtocolName,
   ProtocolNames,
   UninstallMiddlewareContext,
   ValidationMiddleware,
+  InstallMiddlewareContext,
 } from "@connext/types";
 import { stringify } from "@connext/utils";
 
-import { uninstallDepositMiddleware, proposeDepositMiddleware } from "./DepositApp";
+import {
+  uninstallDepositMiddleware,
+  proposeDepositMiddleware,
+  installDepositMiddleware,
+} from "./DepositApp";
 import { proposeLinkedTransferMiddleware } from "./SimpleLinkedTransferApp";
 import { proposeHashLockTransferMiddleware } from "./HashLockTransferApp";
 import { proposeSignedTransferMiddleware } from "./SimpleSignedTransferApp";
@@ -19,6 +24,8 @@ import { proposeWithdrawMiddleware } from "./WithdrawApp";
 import { proposeSwapMiddleware } from "./SimpleTwoPartySwapApp";
 import { commonAppProposalValidation } from "./shared/validation";
 import { AppRegistry } from "./registry";
+import { proposeGraphSignedTransferMiddleware } from "./GraphSignedTransferApp";
+import { proposeGraphBatchedTransferMiddleware } from "./GraphBatchedTransferApp";
 
 const getNameFromAddress = (contractAddress: ContractAddresses, appDefinition: Address) => {
   const [name] =
@@ -47,13 +54,10 @@ export const sharedProposalMiddleware = (
 
 // add any validation middlewares
 export const generateValidationMiddleware = async (
-  network: NetworkContext,
-  supportedTokenAddresses: Address[],
+  networkContexts: NetworkContexts,
+  supportedTokenAddresses: { [chainId: number]: Address[] },
+  getSwapRate: (fromTokenAddress: Address, toTokenAddress: Address) => Promise<string>, // for graph batched app
 ): Promise<ValidationMiddleware> => {
-  if (!network.provider) {
-    throw new Error(`Validation middleware needs access to a provider`);
-  }
-
   const validationMiddleware: ValidationMiddleware = async (
     protocol: ProtocolName,
     middlewareContext: MiddlewareContext,
@@ -61,18 +65,22 @@ export const generateValidationMiddleware = async (
     switch (protocol) {
       case ProtocolNames.propose: {
         await proposeMiddleware(
-          network,
+          networkContexts,
           middlewareContext as ProposeMiddlewareContext,
           supportedTokenAddresses,
+          getSwapRate,
         );
         break;
       }
       case ProtocolNames.uninstall: {
-        await uninstallMiddleware(network, middlewareContext as UninstallMiddlewareContext);
+        await uninstallMiddleware(networkContexts, middlewareContext as UninstallMiddlewareContext);
+        break;
+      }
+      case ProtocolNames.install: {
+        await installMiddleware(networkContexts, middlewareContext as InstallMiddlewareContext);
         break;
       }
       case ProtocolNames.setup:
-      case ProtocolNames.install:
       case ProtocolNames.takeAction: {
         break;
       }
@@ -86,14 +94,33 @@ export const generateValidationMiddleware = async (
 };
 
 const uninstallMiddleware = async (
-  network: NetworkContext,
+  networkContexts: NetworkContexts,
   middlewareContext: UninstallMiddlewareContext,
 ) => {
-  const { appInstance } = middlewareContext;
-  const appDef = appInstance.appInterface.addr;
+  const { appInstance, stateChannel } = middlewareContext;
+  const { contractAddresses, provider } = networkContexts[stateChannel.chainId];
+  const appDef = appInstance.appDefinition;
   switch (appDef) {
-    case network.contractAddresses.DepositApp: {
-      await uninstallDepositMiddleware(middlewareContext, network.provider);
+    case contractAddresses.DepositApp: {
+      await uninstallDepositMiddleware(middlewareContext, provider);
+      break;
+    }
+    default: {
+      return;
+    }
+  }
+};
+
+const installMiddleware = async (
+  networkContexts: NetworkContexts,
+  middlewareContext: InstallMiddlewareContext,
+) => {
+  const { appInstance, stateChannel } = middlewareContext;
+  const { contractAddresses, provider } = networkContexts[stateChannel.chainId];
+  const appDef = appInstance.appDefinition;
+  switch (appDef) {
+    case contractAddresses.DepositApp: {
+      await installDepositMiddleware(middlewareContext, provider);
       break;
     }
     default: {
@@ -103,17 +130,27 @@ const uninstallMiddleware = async (
 };
 
 const proposeMiddleware = async (
-  network: NetworkContext,
+  networkContexts: NetworkContexts,
   middlewareContext: ProposeMiddlewareContext,
-  supportedTokenAddresses: Address[],
+  supportedTokenAddresses: { [chainId: number]: Address[] },
+  getSwapRate: (fromTokenAddress: Address, toTokenAddress: Address) => Promise<string>,
 ) => {
-  const { contractAddresses } = network;
-  const { proposal } = middlewareContext;
-  sharedProposalMiddleware(middlewareContext, contractAddresses, supportedTokenAddresses);
+  const { proposal, stateChannel } = middlewareContext;
+  const { contractAddresses, provider } = networkContexts[stateChannel.chainId];
+  const supportedTokensForChainId = supportedTokenAddresses[stateChannel.chainId];
+  sharedProposalMiddleware(middlewareContext, contractAddresses, supportedTokensForChainId);
   const appDef = proposal.appDefinition;
   switch (appDef) {
     case contractAddresses.DepositApp: {
-      await proposeDepositMiddleware(middlewareContext, network.provider);
+      await proposeDepositMiddleware(middlewareContext, provider);
+      break;
+    }
+    case contractAddresses.GraphBatchedTransferApp: {
+      await proposeGraphBatchedTransferMiddleware(middlewareContext, getSwapRate);
+      break;
+    }
+    case contractAddresses.GraphSignedTransferApp: {
+      proposeGraphSignedTransferMiddleware(middlewareContext);
       break;
     }
     case contractAddresses.SimpleTwoPartySwapApp: {
@@ -129,7 +166,7 @@ const proposeMiddleware = async (
       break;
     }
     case contractAddresses.HashLockTransferApp: {
-      await proposeHashLockTransferMiddleware(middlewareContext, network.provider);
+      await proposeHashLockTransferMiddleware(middlewareContext, provider);
       break;
     }
     case contractAddresses.WithdrawApp: {

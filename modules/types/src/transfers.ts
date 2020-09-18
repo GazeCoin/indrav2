@@ -1,70 +1,65 @@
-import { Address, BigNumber, Bytes32 } from "./basic";
+import { Address, BigNumber, Bytes32, SignatureString } from "./basic";
 import { enumify } from "./utils";
 import {
+  GenericConditionalTransferAppName,
+  GraphBatchedTransferAppName,
+  GraphSignedTransferAppName,
   HashLockTransferAppName,
+  OnlineLinkedTransferAppName,
   SimpleLinkedTransferAppName,
   SimpleSignedTransferAppName,
-  SupportedApplicationNames,
-  GenericConditionalTransferAppName,
-  Attestation,
 } from "./contracts";
 
 ////////////////////////////////////////
 // Types
 
-const RequireOnlineAppNames: SupportedApplicationNames[] = [
-  SupportedApplicationNames.HashLockTransferApp,
-];
-const AllowOfflineAppNames: SupportedApplicationNames[] = [
-  SupportedApplicationNames.SimpleSignedTransferApp,
-  SupportedApplicationNames.SimpleLinkedTransferApp,
-];
-
-export type TransferType = "RequireOnline" | "AllowOffline";
-export const getTransferTypeFromAppName = (
-  name: SupportedApplicationNames,
-): TransferType | undefined => {
-  if (RequireOnlineAppNames.includes(name)) {
-    return "RequireOnline";
-  }
-  if (AllowOfflineAppNames.includes(name)) {
-    return "AllowOffline";
-  }
-
-  return undefined;
-};
-
 export const ConditionalTransferTypes = enumify({
+  GraphBatchedTransfer: GraphBatchedTransferAppName,
+  GraphTransfer: GraphSignedTransferAppName,
   HashLockTransfer: HashLockTransferAppName,
   LinkedTransfer: SimpleLinkedTransferAppName,
+  OnlineTransfer: OnlineLinkedTransferAppName,
   SignedTransfer: SimpleSignedTransferAppName,
 });
-export type ConditionalTransferTypes = typeof ConditionalTransferTypes[keyof typeof ConditionalTransferTypes];
+export type ConditionalTransferTypes = typeof ConditionalTransferTypes[
+  keyof typeof ConditionalTransferTypes
+];
 
 export const ConditionalTransferAppNames = enumify({
+  [GenericConditionalTransferAppName]: GenericConditionalTransferAppName,
+  [GraphBatchedTransferAppName]: GraphBatchedTransferAppName,
+  [GraphSignedTransferAppName]: GraphSignedTransferAppName,
   [HashLockTransferAppName]: HashLockTransferAppName,
+  [OnlineLinkedTransferAppName]: OnlineLinkedTransferAppName,
   [SimpleLinkedTransferAppName]: SimpleLinkedTransferAppName,
   [SimpleSignedTransferAppName]: SimpleSignedTransferAppName,
-  [GenericConditionalTransferAppName]: GenericConditionalTransferAppName,
 });
-export type ConditionalTransferAppNames = typeof ConditionalTransferAppNames[keyof typeof ConditionalTransferAppNames];
+export type ConditionalTransferAppNames = typeof ConditionalTransferAppNames[
+  keyof typeof ConditionalTransferAppNames
+];
 
 ////////////////////////////////////////
 // Metadata
 
 export interface CreatedConditionalTransferMetaMap {
+  [ConditionalTransferTypes.GraphBatchedTransfer]: CreatedGraphBatchedTransferMeta;
+  [ConditionalTransferTypes.GraphTransfer]: CreatedGraphSignedTransferMeta;
   [ConditionalTransferTypes.HashLockTransfer]: CreatedHashLockTransferMeta;
-  [ConditionalTransferTypes.SignedTransfer]: CreatedSignedTransferMeta;
   [ConditionalTransferTypes.LinkedTransfer]: CreatedLinkedTransferMeta;
+  [ConditionalTransferTypes.OnlineTransfer]: CreatedLinkedTransferMeta;
+  [ConditionalTransferTypes.SignedTransfer]: CreatedSignedTransferMeta;
 }
 export type CreatedConditionalTransferMeta = {
   [P in keyof CreatedConditionalTransferMetaMap]: CreatedConditionalTransferMetaMap[P];
 };
 
 export interface UnlockedConditionalTransferMetaMap {
+  [ConditionalTransferTypes.GraphBatchedTransfer]: UnlockedGraphBatchedTransferMeta;
+  [ConditionalTransferTypes.GraphTransfer]: UnlockedGraphSignedTransferMeta;
   [ConditionalTransferTypes.HashLockTransfer]: UnlockedHashLockTransferMeta;
-  [ConditionalTransferTypes.SignedTransfer]: UnlockedSignedTransferMeta;
   [ConditionalTransferTypes.LinkedTransfer]: UnlockedLinkedTransferMeta;
+  [ConditionalTransferTypes.OnlineTransfer]: UnlockedLinkedTransferMeta;
+  [ConditionalTransferTypes.SignedTransfer]: UnlockedSignedTransferMeta;
 }
 export type UnlockedConditionalTransferMeta = {
   [P in keyof UnlockedConditionalTransferMetaMap]: UnlockedConditionalTransferMetaMap[P];
@@ -82,8 +77,25 @@ export type CreatedHashLockTransferMeta = {
 
 export type CreatedSignedTransferMeta = {
   signerAddress: Address;
-  verifyingContract: Address;
   chainId: number;
+  verifyingContract: Address;
+};
+
+export type CreatedGraphSignedTransferMeta = {
+  signerAddress: Address;
+  chainId: number;
+  verifyingContract: Address;
+  requestCID: Bytes32;
+  subgraphDeploymentID: Bytes32;
+};
+
+export type CreatedGraphBatchedTransferMeta = {
+  chainId: number;
+  verifyingContract: Address;
+  subgraphDeploymentID: Bytes32;
+  swapRate: BigNumber;
+  attestationSigner: Address;
+  consumerSigner: Address;
 };
 
 export type UnlockedLinkedTransferMeta = {
@@ -95,32 +107,56 @@ export type UnlockedHashLockTransferMeta = {
   preImage: Bytes32;
 };
 
-export type UnlockedSignedTransferMeta = Attestation;
+export type UnlockedGraphBatchedTransferMeta = {
+  requestCID: Bytes32;
+  responseCID: Bytes32;
+  totalPaid: BigNumber;
+  attestationSignature: SignatureString;
+  consumerSignature: SignatureString;
+};
+
+export type UnlockedGraphSignedTransferMeta = {
+  responseCID: Bytes32;
+  signature: SignatureString;
+};
+
+export type UnlockedSignedTransferMeta = {
+  data: Bytes32;
+  signature: SignatureString;
+};
 
 ////////////////////////////////////////
 // Statuses
 
-export const LinkedTransferStatus = enumify({
+export const TransferStatuses = {
   PENDING: "PENDING",
   COMPLETED: "COMPLETED",
   FAILED: "FAILED",
-});
-export type LinkedTransferStatus = typeof LinkedTransferStatus[keyof typeof LinkedTransferStatus];
-
-export const HashLockTransferStatus = enumify({
-  PENDING: "PENDING",
+} as const;
+export const TransferWithExpiryStatuses = {
+  ...TransferStatuses,
   EXPIRED: "EXPIRED",
-  COMPLETED: "COMPLETED",
-  FAILED: "FAILED",
-});
-export type HashLockTransferStatus = typeof HashLockTransferStatus[keyof typeof HashLockTransferStatus];
+} as const;
+export type TransferWithExpiryStatus = typeof TransferWithExpiryStatuses[
+  keyof typeof TransferWithExpiryStatuses
+];
+export type TransferStatus = typeof TransferStatuses[keyof Omit<
+  typeof TransferStatuses,
+  "EXPIRED"
+>];
 
-export const SignedTransferStatus = enumify({
-  PENDING: "PENDING",
-  COMPLETED: "COMPLETED",
-  FAILED: "FAILED",
-});
-export type SignedTransferStatus = typeof SignedTransferStatus[keyof typeof SignedTransferStatus];
+// Type Aliases
+export const LinkedTransferStatus = TransferStatuses;
+export type LinkedTransferStatus = TransferStatus;
+
+export const HashLockTransferStatus = TransferWithExpiryStatuses;
+export type HashLockTransferStatus = TransferWithExpiryStatus;
+
+export const SignedTransferStatus = TransferStatuses;
+export type SignedTransferStatus = TransferStatus;
+
+export const GraphSignedTransferStatus = TransferStatuses;
+export type GraphSignedTransferStatus = TransferStatus;
 
 ////////////////////////////////////////
 // Misc

@@ -7,13 +7,13 @@ import {
   SimpleLinkedTransferAppActionEncoding,
 } from "@connext/types";
 import { getRandomAddress, getRandomBytes32 } from "@connext/utils";
-import { Contract, ContractFactory, constants, utils } from "ethers";
+import { BigNumber, Contract, ContractFactory, constants, utils } from "ethers";
 
 import { SimpleLinkedTransferApp } from "../../artifacts";
 
 import { expect, provider } from "../utils";
 
-const { Zero } = constants;
+const { HashZero, Zero } = constants;
 const { defaultAbiCoder, soliditySha256 } = utils;
 
 const decodeTransfers = (encodedAppState: string): CoinTransfer[] =>
@@ -44,7 +44,7 @@ describe("SimpleLinkedTransferApp", () => {
   let simpleLinkedTransferApp: Contract;
 
   const computeOutcome = async (state: SimpleLinkedTransferAppState): Promise<CoinTransfer[]> => {
-    const result = await simpleLinkedTransferApp.functions.computeOutcome(encodeAppState(state));
+    const result = await simpleLinkedTransferApp.computeOutcome(encodeAppState(state));
     return decodeTransfers(result);
   };
 
@@ -52,7 +52,7 @@ describe("SimpleLinkedTransferApp", () => {
     state: SimpleLinkedTransferAppState,
     action: SimpleLinkedTransferAppAction,
   ): Promise<SimpleLinkedTransferAppState> => {
-    const result = await simpleLinkedTransferApp.functions.applyAction(
+    const result = await simpleLinkedTransferApp.applyAction(
       encodeAppState(state),
       encodeAppAction(action),
     );
@@ -62,7 +62,7 @@ describe("SimpleLinkedTransferApp", () => {
   const createInitialState = async (preImage: string): Promise<SimpleLinkedTransferAppState> => {
     const senderAddr = getRandomAddress();
     const receiverAddr = getRandomAddress();
-    const transferAmount = new utils.BigNumber(10000);
+    const transferAmount = BigNumber.from(10000);
     const linkedHash = createLinkedHash(preImage);
     return {
       coinTransfers: [
@@ -95,14 +95,19 @@ describe("SimpleLinkedTransferApp", () => {
     pre: SimpleLinkedTransferAppState,
     post: SimpleLinkedTransferAppState,
     action: SimpleLinkedTransferAppAction,
+    success: boolean = true,
   ) => {
-    expect(post.preImage).to.eq(action.preImage);
-    expect(post.finalized).to.be.true;
-    expect(post.linkedHash).to.eq(pre.linkedHash);
-    expect(post.coinTransfers[0].amount).to.eq(Zero);
     expect(post.coinTransfers[0].to).to.eq(pre.coinTransfers[0].to);
-    expect(post.coinTransfers[1].amount).to.eq(pre.coinTransfers[0].amount);
     expect(post.coinTransfers[1].to).to.eq(pre.coinTransfers[1].to);
+    expect(post.finalized).to.be.true;
+    expect(post.preImage).to.eq(action.preImage);
+    if (success) {
+      expect(post.coinTransfers[0].amount).to.eq(Zero);
+      expect(post.coinTransfers[1].amount).to.eq(pre.coinTransfers[0].amount);
+      return;
+    }
+    expect(post.coinTransfers[0].amount).to.eq(pre.coinTransfers[0].amount);
+    expect(post.coinTransfers[1].amount).to.eq(Zero);
   };
 
   before(async () => {
@@ -120,6 +125,16 @@ describe("SimpleLinkedTransferApp", () => {
     const action: SimpleLinkedTransferAppAction = { preImage };
     const afterActionState = await applyAction(initialState, action);
     await validateAction(initialState, afterActionState, action);
+    const outcome = await computeOutcome(afterActionState);
+    await validateOutcome(afterActionState, outcome);
+  });
+
+  it("can cancel a payment", async () => {
+    const preImage = HashZero;
+    const initialState = await createInitialState(preImage);
+    const action: SimpleLinkedTransferAppAction = { preImage };
+    const afterActionState = await applyAction(initialState, action);
+    await validateAction(initialState, afterActionState, action, false);
     const outcome = await computeOutcome(afterActionState);
     await validateOutcome(afterActionState, outcome);
   });

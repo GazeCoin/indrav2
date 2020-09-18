@@ -1,4 +1,4 @@
-import { utils } from "ethers";
+import { BigNumber } from "ethers";
 import {
   Column,
   CreateDateColumn,
@@ -11,8 +11,9 @@ import {
 } from "typeorm";
 
 import { Channel } from "../channel/channel.entity";
-import { IsEthAddress, IsBytes32, IsEthSignature } from "../validate";
 import { OnchainTransaction } from "../onchainTransactions/onchainTransaction.entity";
+import { transformBN } from "../utils";
+import { IsEthAddress, IsBytes32, IsEthSignature } from "../validate";
 
 @Entity()
 export class Withdraw {
@@ -25,13 +26,8 @@ export class Withdraw {
   @UpdateDateColumn({ type: "timestamp" })
   updatedAt!: Date;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => new utils.BigNumber(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  amount!: utils.BigNumber;
+  @Column("text", { transformer: transformBN })
+  amount!: BigNumber;
 
   @Column("text")
   @IsEthAddress()

@@ -12,12 +12,29 @@ import {
   SimpleLinkedTransferAppState,
   SimpleSignedTransferAppState,
   HashLockTransferAppState,
+  GraphBatchedTransferAppState,
+  CreatedGraphBatchedTransferMeta,
+  EIP712Domain,
+  DOMAIN_NAME,
+  DOMAIN_VERSION,
+  DOMAIN_SALT,
+  GRAPH_BATCHED_SWAP_CONVERSION,
+  GraphSignedTransferAppState,
+  CreatedGraphSignedTransferMeta,
 } from "@connext/types";
-import { toBN, stringify } from "@connext/utils";
-import { HashZero, Zero } from "ethers/constants";
+import {
+  toBN,
+  stringify,
+  hashDomainSeparator,
+  getAddressFromAssetId,
+  getSignerAddressFromPublicIdentifier,
+} from "@connext/utils";
+import { constants, utils, BigNumber } from "ethers";
 
 import { AbstractController } from "./AbstractController";
-import { soliditySha256 } from "ethers/utils";
+
+const { HashZero, Zero } = constants;
+const { soliditySha256 } = utils;
 
 export class CreateTransferController extends AbstractController {
   public createTransfer = async (
@@ -26,11 +43,14 @@ export class CreateTransferController extends AbstractController {
     this.log.info(`conditionalTransfer started: ${stringify(params)}`);
 
     const amount = toBN(params.amount);
-    const { meta, recipient, assetId, conditionType } = params;
+    const { meta, recipient } = params;
+    const assetId = getAddressFromAssetId(params.assetId);
+    let conditionType = params.conditionType;
 
     const submittedMeta = { ...(meta || {}) };
     submittedMeta.recipient = recipient;
     submittedMeta.sender = this.connext.publicIdentifier;
+    submittedMeta.senderAssetId = assetId;
 
     const baseInitialState: GenericConditionalTransferAppState = {
       coinTransfers: [
@@ -51,12 +71,22 @@ export class CreateTransferController extends AbstractController {
     let initialState:
       | SimpleLinkedTransferAppState
       | HashLockTransferAppState
-      | SimpleSignedTransferAppState;
+      | SimpleSignedTransferAppState
+      | GraphBatchedTransferAppState
+      | GraphSignedTransferAppState;
 
+
+    // Set transferMeta & submittedMeta & initialState according to conditionType
     switch (conditionType) {
+      case ConditionalTransferTypes.OnlineTransfer: {
+        // Under the hood, still use the LinkedTransfer contract & logic
+        conditionType = ConditionalTransferTypes.LinkedTransfer;
+        submittedMeta.requireOnline = true;
+      }
+      // OnlineTransfer is almost the same as LinkedTransfer: only difference is requireOnline
+      // eslint-disable-next-line no-fallthrough
       case ConditionalTransferTypes.LinkedTransfer: {
         const { preImage, paymentId } = params as PublicParams.LinkedTransfer;
-        // add encrypted preImage to meta so node can store it in the DB
         const linkedHash = soliditySha256(["bytes32"], [preImage]);
 
         initialState = {
@@ -65,6 +95,7 @@ export class CreateTransferController extends AbstractController {
           preImage: HashZero,
         } as SimpleLinkedTransferAppState;
 
+        // add encrypted preImage to meta so node can store it in the DB
         if (recipient) {
           const encryptedPreImage = await this.channelProvider.encrypt(preImage, recipient);
           submittedMeta.encryptedPreImage = encryptedPreImage;
@@ -79,16 +110,17 @@ export class CreateTransferController extends AbstractController {
         const { lockHash, timelock } = params as PublicParams.HashLockTransfer;
 
         // convert to block height
-        const expiry = toBN(timelock).add(await this.connext.ethProvider.getBlockNumber());
+        const currentBlock = await this.connext.ethProvider.getBlockNumber();
+        const expiry = toBN(timelock).add(currentBlock);
+        this.log.info(
+          `HashLockTransfer with timelock ${timelock} will expire at block ${expiry} (currentBlock=${currentBlock})`,
+        );
         initialState = {
           ...baseInitialState,
           lockHash,
           preImage: HashZero,
           expiry,
         } as HashLockTransferAppState;
-        initialState.expiry = expiry;
-        initialState.lockHash = lockHash;
-        initialState.preImage = HashZero;
 
         const paymentId = soliditySha256(["address", "bytes32"], [assetId, lockHash]);
         submittedMeta.paymentId = paymentId;
@@ -102,6 +134,75 @@ export class CreateTransferController extends AbstractController {
 
         break;
       }
+      case ConditionalTransferTypes.GraphTransfer: {
+        const {
+          chainId,
+          verifyingContract,
+          requestCID,
+          subgraphDeploymentID,
+          signerAddress,
+          paymentId,
+        } = params as PublicParams.GraphTransfer;
+
+        initialState = {
+          ...baseInitialState,
+          chainId,
+          verifyingContract,
+          requestCID,
+          subgraphDeploymentID,
+          paymentId,
+          signerAddress,
+        } as GraphSignedTransferAppState;
+
+        transferMeta = {
+          signerAddress,
+          chainId,
+          verifyingContract,
+          requestCID,
+          subgraphDeploymentID,
+        } as CreatedGraphSignedTransferMeta;
+
+        submittedMeta.paymentId = paymentId;
+
+        break;
+      }
+      case ConditionalTransferTypes.GraphBatchedTransfer: {
+        const {
+          consumerSigner,
+          chainId,
+          verifyingContract,
+          subgraphDeploymentID,
+          paymentId,
+        } = params as PublicParams.GraphBatchedTransfer;
+
+        // indexer
+        const attestationSigner = getSignerAddressFromPublicIdentifier(recipient);
+        const swapRate = BigNumber.from(1).mul(GRAPH_BATCHED_SWAP_CONVERSION);
+
+        initialState = {
+          ...baseInitialState,
+          chainId,
+          verifyingContract,
+          subgraphDeploymentID,
+          paymentId,
+          attestationSigner, // indexer
+          consumerSigner,
+          swapRate,
+        } as GraphBatchedTransferAppState;
+
+        transferMeta = {
+          attestationSigner,
+          consumerSigner,
+          chainId,
+          verifyingContract,
+          subgraphDeploymentID,
+          swapRate,
+        } as CreatedGraphBatchedTransferMeta;
+
+        submittedMeta.paymentId = paymentId;
+
+        break;
+      }
       case ConditionalTransferTypes.SignedTransfer: {
         const {
           signerAddress,
@@ -110,18 +211,27 @@ export class CreateTransferController extends AbstractController {
           paymentId,
         } = params as PublicParams.SignedTransfer;
 
+        const domainSeparator: EIP712Domain = {
+          name: DOMAIN_NAME,
+          version: DOMAIN_VERSION,
+          chainId,
+          verifyingContract,
+          salt: DOMAIN_SALT,
+        };
+
         initialState = {
           ...baseInitialState,
-          chainId,
           signerAddress,
+          chainId,
           verifyingContract,
           paymentId,
+          domainSeparator: hashDomainSeparator(domainSeparator),
         } as SimpleSignedTransferAppState;
 
         transferMeta = {
           signerAddress,
-          verifyingContract,
           chainId,
+          verifyingContract,
         } as CreatedSignedTransferMeta;
 
         submittedMeta.paymentId = paymentId;

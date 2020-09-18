@@ -1,9 +1,17 @@
 import { enumify } from "./utils";
 import { ProtocolParams, ProtocolName } from "./protocol";
-import { AppInstanceProposal, AppInstanceJson } from "./app";
+import { AppInstanceJson } from "./app";
 import { StateChannelJSON } from "./state";
 
 // Note: these are also used in the node so shouldn't be moved into cf-core
+
+export type MiddlewareMap = {
+  // TODO: fix type string
+  [protocolName: string]: (
+    protocol: ProtocolName,
+    middlewareContext: MiddlewareContext,
+  ) => Promise<void>;
+};
 
 export type GenericMiddleware = {
   (args: any): any;
@@ -20,12 +28,12 @@ export type ProtocolRole = keyof typeof ProtocolRoles;
 
 export type SetupMiddlewareContext = {
   role: ProtocolRole;
-  params: ProtocolParams.Setup;
+  params: Omit<ProtocolParams.Setup, "chainId">;
 };
 export type ProposeMiddlewareContext = {
   role: ProtocolRole;
   params: ProtocolParams.Propose;
-  proposal: AppInstanceProposal;
+  proposal: AppInstanceJson;
   stateChannel: StateChannelJSON;
 };
 export type InstallMiddlewareContext = {

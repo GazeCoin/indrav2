@@ -1,3 +1,5 @@
+import { AppName, StoredAppChallengeStatus } from "@connext/types";
+import { BigNumber } from "ethers";
 import {
   OneToOne,
   JoinColumn,
@@ -12,18 +14,16 @@ import {
 } from "typeorm";
 
 import { AppInstance } from "../appInstance/appInstance.entity";
-import { IsKeccak256Hash } from "../validate";
 import { Channel } from "../channel/channel.entity";
-import { utils } from "ethers";
-import { AppName, StoredAppChallengeStatus } from "@connext/types";
-import { StateProgressedEvent } from "../stateProgressedEvent/stateProgressedEvent.entity";
 import { ChallengeUpdatedEvent } from "../challengeUpdatedEvent/challengeUpdatedEvent.entity";
-import { toBN } from "@connext/utils";
+import { StateProgressedEvent } from "../stateProgressedEvent/stateProgressedEvent.entity";
+import { transformBN } from "../utils";
+import { IsKeccak256Hash } from "../validate";
 
 @Entity()
 export class ProcessedBlock {
   @PrimaryColumn("integer", { unique: true })
-  blockNumber: number;
+  blockNumber!: number;
 }
 
 @Entity()
@@ -31,28 +31,18 @@ export class Challenge<T extends AppName = any> {
   @PrimaryGeneratedColumn()
   id!: number;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => toBN(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  versionNumber: utils.BigNumber;
+  @Column("text", { transformer: transformBN })
+  versionNumber!: BigNumber;
 
   @Column("text")
   @IsKeccak256Hash()
-  appStateHash: string;
+  appStateHash!: string;
 
-  @Column("text", {
-    transformer: {
-      from: (value: string): utils.BigNumber => toBN(value),
-      to: (value: utils.BigNumber): string => value.toString(),
-    },
-  })
-  finalizesAt: utils.BigNumber;
+  @Column("text", { transformer: transformBN })
+  finalizesAt!: BigNumber;
 
   @Column({ type: "enum", enum: StoredAppChallengeStatus })
-  status: StoredAppChallengeStatus;
+  status!: StoredAppChallengeStatus;
 
   @OneToOne((type: any) => AppInstance)
   @JoinColumn()
@@ -64,12 +54,12 @@ export class Challenge<T extends AppName = any> {
   @OneToMany((type) => ChallengeUpdatedEvent, (event) => event.challenge)
   challengeUpdatedEvents!: ChallengeUpdatedEvent<T>[];
 
-  @ManyToOne((type: any) => Channel)
+  @ManyToOne((type: any) => Channel, (channel) => channel.challenges)
   channel!: Channel;
 
   @CreateDateColumn()
-  createdAt: Date;
+  createdAt!: Date;
 
   @UpdateDateColumn()
-  updatedAt: Date;
+  updatedAt!: Date;
 }

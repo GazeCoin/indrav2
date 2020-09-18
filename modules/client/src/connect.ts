@@ -10,7 +10,15 @@ import {
   STORE_SCHEMA_VERSION,
   IChannelSigner,
 } from "@connext/types";
-import { ChannelSigner, ConsoleLogger, logTime, stringify, delay } from "@connext/utils";
+import {
+  ChannelSigner,
+  ConsoleLogger,
+  logTime,
+  stringify,
+  delay,
+  getChainId,
+} from "@connext/utils";
+import { Watcher } from "@connext/watcher";
 
 import { Contract, providers } from "ethers";
 
@@ -30,32 +38,55 @@ export const connect = async (
 
   const {
     channelProvider: providedChannelProvider,
-    logger: providedLogger,
     ethProviderUrl,
-    loggerService,
     logLevel,
+    logger: providedLogger,
+    loggerService,
+    messagingUrl,
+    nodeUrl,
+    middlewareMap,
+    skipInitStore,
+    watcherEnabled,
+    skipSync,
   } = opts;
-  let { store, messaging, nodeUrl, messagingUrl } = opts;
-  if (store) {
-    await store.init();
-  }
+  let { ethProvider, messaging } = opts;
 
   const logger = loggerService
     ? loggerService.newContext("ConnextConnect")
     : new ConsoleLogger("ConnextConnect", logLevel, providedLogger);
 
+  const urls = stringify({ ethProviderUrl, nodeUrl, messagingUrl });
   logger.info(
-    `Called connect with ${stringify({ nodeUrl, ethProviderUrl, messagingUrl })}, and ${
+    `Called connect with ${urls}, and ${
       providedChannelProvider!!
         ? `provided channel provider`
         : `signer ${typeof opts.signer === "string" ? `using private key` : `with injected signer`}`
     }`,
   );
 
-  // setup ethProvider + network information
-  logger.debug(`Creating ethereum provider - ethProviderUrl: ${ethProviderUrl}`);
-  const ethProvider = new providers.JsonRpcProvider(ethProviderUrl);
-  const network = await ethProvider.getNetwork();
+  const store = opts.store || getLocalStore();
+
+  if (!skipInitStore) {
+    await store.init();
+  }
+
+  logger.info(
+    `Using ${opts.store ? "given" : "local"} store containing ${
+      (await store.getAllChannels()).length
+    } channels`,
+  );
+
+  // setup ethProvider
+  logger.debug(`ethProviderUrl=${ethProviderUrl} | ethProvider=${typeof ethProvider}`);
+  let chainId;
+  if (!ethProvider && !ethProviderUrl) {
+    throw new Error(`One of "ethProvider" or "ethProviderUrl" must be provided`);
+  } else if (!ethProvider) {
+    chainId = await getChainId(ethProviderUrl);
+    ethProvider = new providers.JsonRpcProvider(ethProviderUrl, chainId);
+  } else {
+    chainId = (await ethProvider.getNetwork()).chainId;
+  }
 
   // setup messaging and node api
   let node: INodeApiClient;
@@ -74,14 +105,16 @@ export const connect = async (
     }
     logger.debug(`Using channelProvider config: ${stringify(channelProvider.config)}`);
 
-    nodeUrl = channelProvider.config.nodeUrl;
     node = await NodeApiClient.init({
       ethProvider,
       messaging,
       messagingUrl,
       logger,
-      nodeUrl,
+      nodeUrl: channelProvider.config.nodeUrl,
       channelProvider,
+      middlewareMap,
+      skipSync,
+      chainId,
     });
     config = node.config;
     messaging = node.messaging;
@@ -91,11 +124,7 @@ export const connect = async (
     }
 
     signer =
-      typeof opts.signer === "string"
-        ? new ChannelSigner(opts.signer, ethProviderUrl)
-        : opts.signer;
-
-    store = store || getLocalStore();
+      typeof opts.signer === "string" ? new ChannelSigner(opts.signer, ethProvider) : opts.signer;
 
     node = await NodeApiClient.init({
       store,
@@ -105,6 +134,8 @@ export const connect = async (
       logger,
       nodeUrl,
       signer,
+      skipSync,
+      chainId,
     });
     config = node.config;
     messaging = node.messaging;
@@ -113,8 +144,19 @@ export const connect = async (
     throw new Error("Must provide channelProvider or signer");
   }
 
+  // create watcher, which is enabled by default
+  const watcher = await Watcher.init({
+    signer,
+    providers: {},
+    context: node.config.contractAddresses,
+    store,
+  });
+  if (!watcherEnabled) {
+    await watcher.disable();
+  }
+
   // create a token contract based on the provided token
-  const token = new Contract(config.contractAddresses.Token, ERC20.abi, ethProvider);
+  const token = new Contract(config.contractAddresses[chainId].Token, ERC20.abi, ethProvider);
 
   // create appRegistry
   const appRegistry = await node.appRegistry();
@@ -127,11 +169,13 @@ export const connect = async (
     ethProvider,
     logger,
     messaging,
-    network,
+    network: await ethProvider.getNetwork(),
     node,
     signer,
     store,
     token,
+    chainId,
+    watcher,
   });
 
   logger.info(`Done creating connext client`);
@@ -145,12 +189,13 @@ export const connect = async (
     return client;
   }
 
+  let chan;
   // waits until the setup protocol or create channel call is completed
   await new Promise(async (resolve, reject) => {
     // Wait for channel to be available
     const channelIsAvailable = async (): Promise<boolean> => {
       try {
-        const chan = await client.node.getChannel();
+        chan = await client.node.getChannel();
         return chan && chan.available;
       } catch (e) {
         return false;
@@ -167,38 +212,39 @@ export const connect = async (
     return resolve();
   });
 
-  logger.info(`Channel is available`);
-
-  // Make sure our store schema is up-to-date
-  const schemaVersion = await client.channelProvider.getSchemaVersion();
-  if (!schemaVersion || schemaVersion !== STORE_SCHEMA_VERSION) {
-    logger.info(`Outdated store schema detected, restoring state`);
-    await client.restoreState();
-    logger.info(`State restored successfully`);
-    // increment / update store schema version, defaults to types const
-    // of `STORE_SCHEMA_VERSION`
-    await client.channelProvider.updateSchemaVersion();
-  }
+  logger.info(`Channel is available with multisig address: ${chan.multisigAddress}`);
 
   try {
     await client.getFreeBalance();
   } catch (e) {
     if (e.message.includes("StateChannel does not exist yet")) {
-      logger.info(
-        `Our store does not contain channel, attempting to restore: ${e.stack || e.message}`,
-      );
+      logger.info(`Our store does not contain channel, attempting to restore: ${e.message}`);
       await client.restoreState();
       logger.info(`State restored successfully`);
     } else {
-      logger.error(`Failed to get free balance: ${e.stack || e.message}`);
+      logger.error(`Failed to get free balance: ${e.message}`);
       throw e;
     }
+  }
+
+  // Make sure our store schema is up-to-date
+  const schemaVersion = await client.channelProvider.getSchemaVersion();
+  if (!schemaVersion || schemaVersion !== STORE_SCHEMA_VERSION) {
+    logger.info(
+      `Store schema is out-of-date (${schemaVersion} !== ${STORE_SCHEMA_VERSION}), restoring state`,
+    );
+    await client.restoreState();
+    logger.info(`State restored successfully`);
+    // increment / update store schema version, defaults to types const of `STORE_SCHEMA_VERSION`
+    await client.channelProvider.updateSchemaVersion();
   }
 
   // Make sure our state schema is up-to-date
   const { data: sc } = await client.getStateChannel();
   if (!sc.schemaVersion || sc.schemaVersion !== StateSchemaVersion || !sc.addresses) {
-    logger.info("State schema is out-of-date, restoring an up-to-date client state");
+    logger.info(
+      `State schema is out-of-date (${sc.schemaVersion} !== ${StateSchemaVersion}), restoring state`,
+    );
     await client.restoreState();
     logger.info(`State restored successfully`);
   }
@@ -239,20 +285,16 @@ export const connect = async (
   logger.info("Checked in with node");
 
   // watch for/prune lingering withdrawals
-  logger.info("Getting user withdrawals");
+  logger.debug("Getting user withdrawals");
   const previouslyActive = await client.getUserWithdrawals();
   if (previouslyActive.length === 0) {
-    logger.info("No user withdrawals found");
+    logger.debug("No user withdrawals found");
     logTime(logger, start, `Client successfully connected`);
     return client;
   }
 
   try {
-    logger.info(`Watching for user withdrawals`);
-    const transactions = await client.watchForUserWithdrawal();
-    if (transactions.length > 0) {
-      logger.info(`Found node submitted user withdrawals: ${transactions.map((tx) => tx.hash)}`);
-    }
+    await client.watchForUserWithdrawal();
   } catch (e) {
     logger.error(
       `Could not complete watching for user withdrawals: ${

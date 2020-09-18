@@ -17,7 +17,11 @@ export class RpcRouter {
 
   async dispatch(rpc: Rpc): Promise<JsonRpcResponse> {
     if (!methodImplementations[rpc.methodName]) {
-      throw new Error(`Cannot execute ${rpc.methodName}: no implementation. Available methods: ${Object.keys(methodImplementations)}`);
+      throw new Error(
+        `Cannot execute ${rpc.methodName}: no implementation. Available methods: ${Object.keys(
+          methodImplementations,
+        )}`,
+      );
     }
 
     const start = Date.now();
@@ -46,6 +50,11 @@ export class RpcRouter {
 
   async subscribeOnce(event: string, callback: AsyncCallback) {
     this.requestHandler.outgoing.once(event, callback);
+  }
+
+  unsubscribeAll() {
+    this.requestHandler.incoming.removeAllListeners();
+    this.requestHandler.outgoing.removeAllListeners();
   }
 
   async unsubscribe(event: string, callback?: AsyncCallback) {

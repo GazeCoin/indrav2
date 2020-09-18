@@ -1,15 +1,15 @@
-import { constants, utils } from "ethers";
+import { BigNumber, constants, utils } from "ethers";
 import {
   CoinTransfer,
   Address,
   AppIdentity,
-  AppInterface,
   AppInstanceJson,
   OutcomeType,
   SetStateCommitmentJSON,
   StateChannelJSON,
   StateSchemaVersion,
   MinimalTransaction,
+  AppABIEncodings,
 } from "@connext/types";
 import { ChannelSigner, toBN } from "@connext/utils";
 import { SetStateCommitment, SetupCommitment } from "@connext/contracts";
@@ -19,7 +19,7 @@ import { TestNetworkContext } from "./contracts";
 import { AppWithCounterClass } from "./appWithCounter";
 import { TokenIndexedBalance } from "./context";
 
-const { One, Zero } = constants;
+const { One, Zero, AddressZero } = constants;
 const { keccak256, solidityPack, defaultAbiCoder } = utils;
 
 type FreeBalanceStateJSON = {
@@ -31,16 +31,16 @@ type FreeBalanceStateJSON = {
 const freeBalStateEncoding = `tuple(address[] tokenAddresses, tuple(address to, uint256 amount)[][] balances, bytes32[] activeApps)`;
 
 export class MiniFreeBalance {
-  private channelNonce = One;
-  private defaultTimeout = Zero;
-  private stateTimeout = Zero;
+  public channelNonce = One;
+  public defaultTimeout = Zero;
+  public stateTimeout = Zero;
 
   constructor(
     public readonly signerParticipants: ChannelSigner[],
     public readonly multisigAddress: string,
     private balancesIndexedByToken: TokenIndexedBalance,
     private readonly networkContext: TestNetworkContext,
-    public versionNumber: utils.BigNumber = One,
+    public versionNumber: BigNumber = One,
     private activeApps: string[] = [],
   ) {}
 
@@ -81,11 +81,10 @@ export class MiniFreeBalance {
     };
   }
 
-  get appInterface(): AppInterface {
+  get abiEncodings(): AppABIEncodings {
     return {
       stateEncoding: freeBalStateEncoding,
       actionEncoding: undefined,
-      addr: this.appDefinition,
     };
   }
 
@@ -115,6 +114,7 @@ export class MiniFreeBalance {
 
   public static channelFactory(
     signers: ChannelSigner[],
+    chainId: number,
     multisigAddress: string,
     networkContext: TestNetworkContext,
     activeApps: AppWithCounterClass[],
@@ -132,12 +132,12 @@ export class MiniFreeBalance {
       toBN(appIds.length + 1),
       appIds,
     );
-    const channel = {
+    const channel: StateChannelJSON = {
       schemaVersion: StateSchemaVersion,
       multisigAddress,
       addresses: {
-        proxyFactory: networkContext.ProxyFactory,
-        minimumViableMultisig: networkContext.MinimumViableMultisig,
+        ProxyFactory: networkContext.ProxyFactory,
+        MinimumViableMultisig: networkContext.MinimumViableMultisig,
       },
       userIdentifiers: [signers[0].publicIdentifier, signers[1].publicIdentifier],
       proposedAppInstances: [],
@@ -147,6 +147,7 @@ export class MiniFreeBalance {
       ][],
       freeBalanceAppInstance: freeBalance.toJson(),
       monotonicNumProposedApps: channelNonce.toNumber(),
+      chainId,
     };
     return [freeBalance, channel];
   }
@@ -158,13 +159,19 @@ export class MiniFreeBalance {
       initiatorIdentifier: this.signerParticipants[0].publicIdentifier,
       responderIdentifier: this.signerParticipants[1].publicIdentifier,
       defaultTimeout: this.defaultTimeout.toHexString(),
-      appInterface: this.appInterface,
+      abiEncodings: this.abiEncodings,
       appSeqNo: this.channelNonce.toNumber(),
       latestState: this.latestState,
       latestVersionNumber: this.versionNumber.toNumber(),
       stateTimeout: this.stateTimeout.toString(),
       outcomeType: OutcomeType.MULTI_ASSET_MULTI_PARTY_COIN_TRANSFER,
       latestAction: undefined,
+      appDefinition: this.appDefinition,
+      responderDeposit: Zero.toString(),
+      responderDepositAssetId: AddressZero,
+      initiatorDeposit: Zero.toString(),
+      initiatorDepositAssetId: AddressZero,
+      outcomeInterpreterParameters: {} as any,
     };
   }
 

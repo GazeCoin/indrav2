@@ -1,32 +1,39 @@
 #!/usr/bin/env bash
 set -e
 
-dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
-project="`cat $dir/../package.json | grep '"name":' | head -n 1 | cut -d '"' -f 4`"
-registry="`cat $dir/../package.json | grep '"registry":' | head -n 1 | cut -d '"' -f 4`"
+root="$( cd "$( dirname "${BASH_SOURCE[0]}" )/.." >/dev/null 2>&1 && pwd )"
+project="`cat $root/package.json | grep '"name":' | head -n 1 | cut -d '"' -f 4`"
+registry="`cat $root/package.json | grep '"registry":' | head -n 1 | cut -d '"' -f 4`"
 
-version="$1"
-
-commit=`git rev-parse HEAD | head -c 8`
-images="database ethprovider node proxy test_runner webserver"
 registry_url="https://index.docker.io/v1/repositories/${registry#*/}"
+images="bot builder database ethprovider node proxy test_runner"
 
-function safePush {
-  image=${project}_$1
-  echo;echo "Pushing $registry/$image:$version"
-  if [[ -n "`curl -sflL "$registry_url/$image/tags/$version"`" ]]
-  then
-    echo "Image $registry/$image:$version already exists on docker hub, Aborting push"
-    return
-  else
-    docker tag $image:$commit $registry/$image:$version
-    docker push $registry/$image:$version
-    # latest images are used as cache for build steps, keep them up-to-date
-    docker tag $image:$commit $registry/$image:latest
-    docker push $registry/$image:latest
+commit="`git rev-parse HEAD | head -c 8`"
+git_tag="`git tag --points-at HEAD | grep "indra-" | head -n 1`"
+
+# Try to get the semver from git tag or commit message
+if [[ -z "$git_tag" ]]
+then
+  message="`git log --format=%B -n 1 HEAD`"
+  if [[ "$message" == "Deploy indra-"* ]]
+  then semver="${message#Deploy indra-}"
+  else semver=""
   fi
-}
+else semver="`echo $git_tag | sed 's/indra-//'`"
+fi
 
 for image in $images
-do safePush $image
+do
+  if [[ -n "$semver" ]]
+  then
+    echo "Tagging image ${project}_$image:$commit as ${project}_$image:$semver"
+    docker tag ${project}_$image:$commit ${project}_$image:$semver  || true
+  fi
+  for version in latest $commit $semver
+  do
+    echo "Tagging image ${project}_$image:$version as $registry/${project}_$image:$version"
+    docker tag ${project}_$image:$version $registry/${project}_$image:$version  || true
+    echo "Pushing image: $registry/${project}_$image:$version"
+    docker push $registry/${project}_$image:$version || true
+  done
 done

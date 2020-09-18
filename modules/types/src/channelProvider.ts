@@ -16,6 +16,7 @@ import {
   SetStateCommitmentJSON,
   ConditionalTransactionCommitmentJSON,
 } from "./commitments";
+import { MiddlewareMap } from "./middleware";
 
 export const ChannelMethods = enumify({
   ...MethodNames,
@@ -46,8 +47,10 @@ export interface CFChannelProviderOptions {
   ethProvider: providers.JsonRpcProvider;
   signer: IChannelSigner;
   node: INodeApiClient;
-  logger?: ILoggerService;
   store: IStoreService;
+  middlewareMap?: MiddlewareMap;
+  logger?: ILoggerService;
+  skipSync?: boolean;
 }
 
 export type WalletDepositParams = {
@@ -94,6 +97,7 @@ export interface IChannelProvider extends ConnextEventEmitter {
   // LISTENER METHODS
   on(event: string, listener: (...args: any[]) => void): any;
   once(event: string, listener: (...args: any[]) => void): any;
+  removeAllListeners(): any;
 
   ///////////////////////////////////
   // SIGNER METHODS

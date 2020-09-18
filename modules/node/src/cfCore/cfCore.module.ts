@@ -2,7 +2,6 @@ import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
 import { AppInstanceRepository } from "../appInstance/appInstance.repository";
-import { AppRegistryRepository } from "../appRegistry/appRegistry.repository";
 import { ChannelRepository } from "../channel/channel.repository";
 import { SetStateCommitmentRepository } from "../setStateCommitment/setStateCommitment.repository";
 import { WithdrawCommitmentRepository } from "../withdrawCommitment/withdrawCommitment.repository";
@@ -20,6 +19,8 @@ import { CFCoreRecordRepository } from "./cfCore.repository";
 import { CFCoreService } from "./cfCore.service";
 import { CFCoreStore } from "./cfCore.store";
 import { ChallengeRepository, ProcessedBlockRepository } from "../challenge/challenge.repository";
+import { CacheModule } from "../caching/cache.module";
+import { OnchainTransactionModule } from "../onchainTransactions/onchainTransaction.module";
 
 @Module({
   exports: [cfCoreProviderFactory, CFCoreService, CFCoreStore],
@@ -29,9 +30,9 @@ import { ChallengeRepository, ProcessedBlockRepository } from "../challenge/chal
     LockModule,
     LoggerModule,
     MessagingModule,
+    OnchainTransactionModule,
     TypeOrmModule.forFeature([
       CFCoreRecordRepository,
-      AppRegistryRepository,
       ChannelRepository,
       AppInstanceRepository,
       ConditionalTransactionCommitmentRepository,
@@ -41,6 +42,7 @@ import { ChallengeRepository, ProcessedBlockRepository } from "../challenge/chal
       ChallengeRepository,
       ProcessedBlockRepository,
     ]),
+    CacheModule,
   ],
   providers: [cfCoreProviderFactory, CFCoreService, CFCoreStore],
 })

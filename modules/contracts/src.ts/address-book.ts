@@ -1,21 +1,8 @@
 import fs from "fs";
+import { AddressBookEntry, AddressBook as AddressBookJson } from "@connext/types";
 import { constants } from "ethers";
 
 const { AddressZero } = constants;
-
-export type AddressBookEntry = {
-  address: string;
-  constructorArgs?: Array<{ name: string; value: string }>;
-  creationCodeHash?: string;
-  runtimeCodeHash?: string;
-  txHash?: string;
-};
-
-export type AddressBookJson = {
-  [chainId: string]: {
-    [contractName: string]: AddressBookEntry;
-  };
-};
 
 export interface AddressBook {
   getEntry: (contractName: string) => AddressBookEntry;
@@ -34,7 +21,7 @@ export const getAddressBook = (path: string, chainId: string): AddressBook => {
 
   const getEntry = (contractName: string): AddressBookEntry => {
     try {
-      return addressBook[chainId][contractName];
+      return addressBook[chainId][contractName] || { address: AddressZero };
     } catch (e) {
       return { address: AddressZero };
     }

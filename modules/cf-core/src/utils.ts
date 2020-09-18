@@ -1,7 +1,6 @@
 import { CriticalStateChannelAddresses, PublicIdentifier } from "@connext/types";
 import { getSignerAddressFromPublicIdentifier } from "@connext/utils";
-import { Contract, providers, constants, utils } from "ethers";
-import memoize from "memoizee";
+import { BigNumber, Contract, providers, constants, utils } from "ethers";
 
 import { INSUFFICIENT_FUNDS_IN_FREE_BALANCE_FOR_ASSET } from "./errors";
 import { MinimumViableMultisig, ProxyFactory } from "./contracts";
@@ -14,7 +13,7 @@ export const assertSufficientFundsWithinFreeBalance = (
   channel: StateChannel,
   publicIdentifier: string,
   tokenAddress: string,
-  depositAmount: utils.BigNumber,
+  depositAmount: BigNumber,
 ): void => {
   const freeBalanceForToken =
     channel
@@ -61,9 +60,9 @@ export const getCreate2MultisigAddress = async (
 ): Promise<string> => {
   const proxyFactory = new Contract(addresses.ProxyFactory, ProxyFactory.abi, ethProvider);
 
-  const proxyBytecode = await proxyFactory.functions.proxyCreationCode();
+  const proxyBytecode = await proxyFactory.proxyCreationCode();
 
-  return memoizedGetAddress(
+  return getAddress(
     solidityKeccak256(
       ["bytes1", "address", "uint256", "bytes32"],
       [
@@ -74,7 +73,7 @@ export const getCreate2MultisigAddress = async (
           [
             keccak256(
               // see encoding notes
-              new Interface(MinimumViableMultisig.abi).functions.setup.encode([
+              new Interface(MinimumViableMultisig.abi).encodeFunctionData("setup", [
                 [
                   getSignerAddressFromPublicIdentifier(initiatorIdentifier),
                   getSignerAddressFromPublicIdentifier(responderIdentifier),
@@ -93,9 +92,3 @@ export const getCreate2MultisigAddress = async (
     ).slice(-40),
   );
 };
-
-const memoizedGetAddress = memoize((params: string): string => getAddress(params), {
-  max: 100,
-  maxAge: 60 * 1000,
-  primitive: true,
-});

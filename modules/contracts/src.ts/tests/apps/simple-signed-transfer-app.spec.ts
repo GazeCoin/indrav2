@@ -6,27 +6,23 @@ import {
   SimpleSignedTransferAppStateEncoding,
   singleAssetTwoPartyCoinTransferEncoding,
   PrivateKey,
-  Receipt,
+  EIP712Domain,
 } from "@connext/types";
 import {
-  signReceiptMessage,
-  getTestReceiptToSign,
-  getTestVerifyingContract,
   getRandomBytes32,
   getAddressFromPrivateKey,
+  signReceiptMessage,
+  getTestEIP712Domain,
+  hashDomainSeparator,
 } from "@connext/utils";
-import { Contract, ContractFactory, constants, utils } from "ethers";
+import { BigNumber, Contract, ContractFactory, constants, utils } from "ethers";
 
 import { SimpleSignedTransferApp } from "../../artifacts";
 
-import { expect, provider } from "../utils";
+import { expect, provider, mkAddress } from "../utils";
 
-const { Zero } = constants;
+const { HashZero, Zero } = constants;
 const { defaultAbiCoder } = utils;
-
-function mkAddress(prefix: string = "0xa"): string {
-  return prefix.padEnd(42, "0");
-}
 
 const decodeTransfers = (encodedAppState: string): CoinTransfer[] =>
   defaultAbiCoder.decode([singleAssetTwoPartyCoinTransferEncoding], encodedAppState)[0];
@@ -50,30 +46,26 @@ function encodeAppAction(state: SimpleSignedTransferAppAction): string {
 describe("SimpleSignedTransferApp", () => {
   let privateKey: PrivateKey;
   let signerAddress: string;
-  let chainId: number;
-  let verifyingContract: string;
-  let receipt: Receipt;
+  let data: string;
   let goodSig: string;
   let badSig: string;
   let simpleSignedTransferApp: Contract;
   let senderAddr: string;
   let receiverAddr: string;
-  let transferAmount: utils.BigNumber;
+  let transferAmount: BigNumber;
   let preState: SimpleSignedTransferAppState;
   let paymentId: string;
+  let domainSeparator: EIP712Domain;
 
   async function computeOutcome(state: SimpleSignedTransferAppState): Promise<string> {
-    return simpleSignedTransferApp.functions.computeOutcome(encodeAppState(state));
+    return simpleSignedTransferApp.computeOutcome(encodeAppState(state));
   }
 
   async function applyAction(
     state: SimpleSignedTransferAppState,
     action: SimpleSignedTransferAppAction,
   ): Promise<string> {
-    return simpleSignedTransferApp.functions.applyAction(
-      encodeAppState(state),
-      encodeAppAction(action),
-    );
+    return simpleSignedTransferApp.applyAction(encodeAppState(state), encodeAppAction(action));
   }
 
   async function validateOutcome(
@@ -99,16 +91,19 @@ describe("SimpleSignedTransferApp", () => {
     privateKey = wallet.privateKey;
     signerAddress = getAddressFromPrivateKey(privateKey);
 
-    chainId = (await wallet.provider.getNetwork()).chainId;
-    receipt = getTestReceiptToSign();
-    verifyingContract = getTestVerifyingContract();
-    goodSig = await signReceiptMessage(receipt, chainId, verifyingContract, privateKey);
-    badSig = getRandomBytes32();
     paymentId = getRandomBytes32();
+    data = getRandomBytes32();
+    const receipt = { paymentId, data };
+
+    const network = await provider.getNetwork();
+    domainSeparator = getTestEIP712Domain(network.chainId);
+
+    goodSig = await signReceiptMessage(domainSeparator, receipt, privateKey);
+    badSig = getRandomBytes32();
 
     senderAddr = mkAddress("0xa");
     receiverAddr = mkAddress("0xB");
-    transferAmount = new utils.BigNumber(10000);
+    transferAmount = BigNumber.from(10000);
     preState = {
       coinTransfers: [
         {
@@ -120,18 +115,19 @@ describe("SimpleSignedTransferApp", () => {
           to: receiverAddr,
         },
       ],
-      finalized: false,
-      paymentId,
       signerAddress,
-      chainId,
-      verifyingContract,
+      domainSeparator: hashDomainSeparator(domainSeparator),
+      paymentId,
+      finalized: false,
+      chainId: domainSeparator.chainId,
+      verifyingContract: domainSeparator.verifyingContract,
     };
   });
 
-  describe("update state", () => {
+  describe("applyAction", () => {
     it("will redeem a payment with correct signature", async () => {
       const action: SimpleSignedTransferAppAction = {
-        ...receipt,
+        data,
         signature: goodSig,
       };
 
@@ -139,6 +135,7 @@ describe("SimpleSignedTransferApp", () => {
       const afterActionState = decodeAppState(ret);
 
       const expectedPostState: SimpleSignedTransferAppState = {
+        ...preState,
         coinTransfers: [
           {
             amount: Zero,
@@ -149,10 +146,42 @@ describe("SimpleSignedTransferApp", () => {
             to: receiverAddr,
           },
         ],
-        paymentId,
-        signerAddress,
-        chainId,
-        verifyingContract,
+        finalized: true,
+      };
+
+      expect(afterActionState.finalized).to.eq(expectedPostState.finalized);
+      expect(afterActionState.coinTransfers[0].amount).to.eq(
+        expectedPostState.coinTransfers[0].amount,
+      );
+      expect(afterActionState.coinTransfers[1].amount).to.eq(
+        expectedPostState.coinTransfers[1].amount,
+      );
+
+      ret = await computeOutcome(afterActionState);
+      validateOutcome(ret, expectedPostState);
+    });
+
+    it("will cancel a payment", async () => {
+      const action: SimpleSignedTransferAppAction = {
+        data: HashZero,
+        signature: goodSig,
+      };
+
+      let ret = await applyAction(preState, action);
+      const afterActionState = decodeAppState(ret);
+
+      const expectedPostState: SimpleSignedTransferAppState = {
+        ...preState,
+        coinTransfers: [
+          {
+            amount: transferAmount,
+            to: senderAddr,
+          },
+          {
+            amount: Zero,
+            to: receiverAddr,
+          },
+        ],
         finalized: true,
       };
 
@@ -170,7 +199,7 @@ describe("SimpleSignedTransferApp", () => {
 
     it("will revert action with incorrect signature", async () => {
       const action: SimpleSignedTransferAppAction = {
-        ...receipt,
+        data,
         signature: badSig,
       };
 
@@ -181,7 +210,7 @@ describe("SimpleSignedTransferApp", () => {
 
     it("will revert action if already finalized", async () => {
       const action: SimpleSignedTransferAppAction = {
-        ...receipt,
+        data,
         signature: goodSig,
       };
       preState.finalized = true;

@@ -27,7 +27,7 @@ Contents
 *********
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
     :caption: Quick Start
 
     quickstart/introduction
@@ -37,7 +37,7 @@ Contents
     quickstart/advanced
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
     :caption: Background
 
     background/architecture
@@ -47,26 +47,29 @@ Contents
     background/faq
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
     :caption: Guides
 
     how-to/deploy-indra
+    how-to/integrate-chain
     how-to/integrate-browser
     how-to/integrate-react-native
     how-to/integrate-node
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
     :caption: API Reference
 
     reference/cf-core
     reference/client
+    reference/node
     reference/store
     reference/types
     reference/utils
+    reference/watcher
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
     :caption: Contributor Documentation
 
     contributor/CONTRIBUTING

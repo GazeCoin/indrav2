@@ -1,16 +1,13 @@
-import { StateChannelJSON } from "@connext/types";
-import { Injectable, OnApplicationBootstrap } from "@nestjs/common";
+import { StateChannelJSON, DepositAppName } from "@connext/types";
+import { Injectable } from "@nestjs/common";
 
-import { CFCoreRecordRepository } from "../cfCore/cfCore.repository";
 import { CFCoreService } from "../cfCore/cfCore.service";
 import { Channel } from "../channel/channel.entity";
 import { ChannelService } from "../channel/channel.service";
-import { ConfigService } from "../config/config.service";
 import { LoggerService } from "../logger/logger.service";
-import { ChannelRepository, convertChannelToJSON } from "../channel/channel.repository";
+import { ChannelRepository, ChannelSerializer } from "../channel/channel.repository";
 import { CFCoreStore } from "../cfCore/cfCore.store";
-import { SetupCommitmentRepository } from "../setupCommitment/setupCommitment.repository";
-import { AppInstanceRepository } from "../appInstance/appInstance.repository";
+import { constants } from "ethers";
 
 export interface RepairCriticalAddressesResponse {
   fixed: string[];
@@ -18,17 +15,13 @@ export interface RepairCriticalAddressesResponse {
 }
 
 @Injectable()
-export class AdminService implements OnApplicationBootstrap {
+export class AdminService {
   constructor(
     private readonly cfCoreService: CFCoreService,
     private readonly channelService: ChannelService,
-    private readonly configService: ConfigService,
     private readonly log: LoggerService,
     private readonly cfCoreStore: CFCoreStore,
-    private readonly setupCommitment: SetupCommitmentRepository,
     private readonly channelRepository: ChannelRepository,
-    private readonly cfCoreRepository: CFCoreRecordRepository,
-    private readonly appInstanceRepository: AppInstanceRepository,
   ) {
     this.log.setContext("AdminService");
   }
@@ -37,13 +30,19 @@ export class AdminService implements OnApplicationBootstrap {
   ///// GENERAL PURPOSE ADMIN FNS
 
   /**  Get channels by address */
-  async getStateChannelByUserPublicIdentifier(userIdentifier: string): Promise<StateChannelJSON> {
-    const channel = await this.channelRepository.findByUserPublicIdentifierOrThrow(userIdentifier);
-    return convertChannelToJSON(channel);
+  async getStateChannelByUserPublicIdentifierAndChain(
+    userIdentifier: string,
+    chainId: number,
+  ): Promise<StateChannelJSON | undefined> {
+    const channel = await this.channelRepository.findByUserPublicIdentifierAndChain(
+      userIdentifier,
+      chainId,
+    );
+    return channel && ChannelSerializer.toJSON(channel);
   }
 
   /**  Get channels by multisig */
-  async getStateChannelByMultisig(multisigAddress: string): Promise<StateChannelJSON> {
+  async getStateChannelByMultisig(multisigAddress: string): Promise<StateChannelJSON | undefined> {
     return this.cfCoreStore.getStateChannel(multisigAddress);
   }
 
@@ -86,7 +85,7 @@ export class AdminService implements OnApplicationBootstrap {
   > {
     // get all available channels, meaning theyre deployed
     const channels = await this.channelService.findAll();
-    const corrupted = [];
+    const corrupted: any[] = [];
     for (const channel of channels) {
       // try to get the free balance of eth
       const { multisigAddress, userIdentifier: userAddress } = channel;
@@ -113,7 +112,7 @@ export class AdminService implements OnApplicationBootstrap {
     const channels = await this.channelService.findAll();
     // for each of the channels, search for the entries to merge based on
     // outlined possibilities
-    const toMerge = [];
+    const toMerge: any[] = [];
     for (const chan of channels) {
       const oldPrefix = await this.cfCoreService.getChannelRecord(
         chan.multisigAddress,
@@ -129,5 +128,30 @@ export class AdminService implements OnApplicationBootstrap {
     return toMerge;
   }
 
-  async onApplicationBootstrap() {}
+  /**
+   * Uninstall deposit app to unbrick channels in the case where collateralization got stuck.
+   */
+  async uninstallDepositAppForChannel(
+    multisigAddress: string,
+    assetId: string = constants.AddressZero,
+  ): Promise<string | undefined> {
+    const channel = await this.channelRepository.findByMultisigAddressOrThrow(multisigAddress);
+    const depositAppInfo = this.cfCoreService.getAppInfoByNameAndChain(
+      DepositAppName,
+      channel.chainId,
+    );
+    const apps = await this.cfCoreService.getAppInstancesByAppDefinition(
+      multisigAddress,
+      depositAppInfo.appDefinitionAddress,
+    );
+
+    const forAssetId = apps.find((app) => app.initiatorDepositAssetId === assetId);
+    if (!forAssetId) {
+      this.log.warn(`No deposit apps found to uninstall for ${multisigAddress}`);
+      return;
+    }
+
+    await this.cfCoreService.uninstallApp(forAssetId.identityHash, channel);
+    return forAssetId.identityHash;
+  }
 }

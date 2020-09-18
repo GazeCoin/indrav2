@@ -1,6 +1,5 @@
 import {
   AppInstanceJson,
-  AppInstanceProposal,
   CriticalStateChannelAddresses,
   IStoreService,
   PublicIdentifier,
@@ -15,7 +14,7 @@ import {
   toBN,
 } from "@connext/utils";
 
-import { utils } from "ethers";
+import { BigNumber } from "ethers";
 
 import { HARD_CODED_ASSUMPTIONS } from "../constants";
 
@@ -37,12 +36,13 @@ const ERRORS = {
 export class StateChannel {
   constructor(
     public readonly multisigAddress: string,
+    public readonly chainId: number,
     public readonly addresses: CriticalStateChannelAddresses,
     public readonly initiatorIdentifier: string,
     public readonly responderIdentifier: string,
-    readonly proposedAppInstances: ReadonlyMap<string, AppInstanceProposal> = new Map<
+    readonly proposedAppInstances: ReadonlyMap<string, AppInstanceJson> = new Map<
       string,
-      AppInstanceProposal
+      AppInstanceJson
     >([]),
     readonly appInstances: ReadonlyMap<string, AppInstance> = new Map<string, AppInstance>([]),
     private readonly freeBalanceAppInstance?: AppInstance,
@@ -66,6 +66,12 @@ export class StateChannel {
     return this.appInstances.size;
   }
 
+  public incrementNumProposedApps(): StateChannel {
+    return this.build({
+      monotonicNumProposedApps: this.monotonicNumProposedApps + 1,
+    });
+  }
+
   public getAppInstance(appIdentityHash: string): AppInstance {
     if (this.hasFreeBalance && appIdentityHash === this.freeBalance.identityHash) {
       return this.freeBalance;
@@ -87,7 +93,7 @@ export class StateChannel {
   public hasAppInstanceOfKind(address: string): boolean {
     return (
       Array.from(this.appInstances.values()).filter((appInstance: AppInstance) => {
-        return appInstance.appInterface.addr === address;
+        return appInstance.appDefinition === address;
       }).length > 0
     );
   }
@@ -103,7 +109,7 @@ export class StateChannel {
     return appInstance;
   }
 
-  public mostRecentlyProposedAppInstance(): AppInstanceProposal {
+  public mostRecentlyProposedAppInstance(): AppInstanceJson {
     if (this.proposedAppInstances.size === 0) {
       throw new Error("There are no proposed AppInstances in this StateChannel");
     }
@@ -115,7 +121,7 @@ export class StateChannel {
   public getAppInstanceOfKind(address: string) {
     const appInstances = Array.from(this.appInstances.values()).filter(
       (appInstance: AppInstance) => {
-        return appInstance.appInterface.addr === address;
+        return appInstance.appDefinition === address;
       },
     );
     if (appInstances.length !== 1) {
@@ -129,7 +135,7 @@ export class StateChannel {
   public getAppInstancesOfKind(address: string) {
     const appInstances = Array.from(this.appInstances.values()).filter(
       (appInstance: AppInstance) => {
-        return appInstance.appInterface.addr === address;
+        return appInstance.appDefinition === address;
       },
     );
     if (appInstances.length === 0) {
@@ -192,17 +198,19 @@ export class StateChannel {
 
   private build = (args: {
     multisigAddress?: string;
+    chainId?: number;
     addresses?: CriticalStateChannelAddresses;
     initiatorIdentifier?: string;
     responderIdentifier?: string;
     appInstances?: ReadonlyMap<string, AppInstance>;
-    proposedAppInstances?: ReadonlyMap<string, AppInstanceProposal>;
+    proposedAppInstances?: ReadonlyMap<string, AppInstanceJson>;
     freeBalanceAppInstance?: AppInstance;
     monotonicNumProposedApps?: number;
     schemaVersion?: number;
   }) => {
     return new StateChannel(
       args.multisigAddress || this.multisigAddress,
+      args.chainId || this.chainId,
       args.addresses || this.addresses,
       args.initiatorIdentifier || this.initiatorIdentifier,
       args.responderIdentifier || this.responderIdentifier,
@@ -249,16 +257,18 @@ export class StateChannel {
     freeBalanceAppAddress: string,
     addresses: CriticalStateChannelAddresses,
     multisigAddress: string,
+    chainId: number,
     initiatorId: PublicIdentifier,
     responderId: PublicIdentifier,
     freeBalanceTimeout?: number,
   ) {
     return new StateChannel(
       multisigAddress,
+      chainId,
       addresses,
       initiatorId,
       responderId,
-      new Map<string, AppInstanceProposal>([]),
+      new Map<string, AppInstanceJson>([]),
       new Map<string, AppInstance>([]),
       createFreeBalance(
         initiatorId,
@@ -273,16 +283,18 @@ export class StateChannel {
 
   public static createEmptyChannel(
     multisigAddress: string,
+    chainId: number,
     addresses: CriticalStateChannelAddresses,
     initiatorId: string,
     responderId: string,
   ) {
     return new StateChannel(
       multisigAddress,
+      chainId,
       addresses,
       initiatorId,
       responderId,
-      new Map<string, AppInstanceProposal>([]),
+      new Map<string, AppInstanceJson>([]),
       new Map<string, AppInstance>(),
       // Note that this FreeBalance is undefined because a channel technically
       // does not have a FreeBalance before the `setup` protocol gets run
@@ -291,8 +303,8 @@ export class StateChannel {
     );
   }
 
-  public addProposal(proposal: AppInstanceProposal) {
-    const proposedAppInstances = new Map<string, AppInstanceProposal>(
+  public addProposal(proposal: AppInstanceJson) {
+    const proposedAppInstances = new Map<string, AppInstanceJson>(
       this.proposedAppInstances.entries(),
     );
 
@@ -305,11 +317,13 @@ export class StateChannel {
   }
 
   public removeProposal = (appIdentityHash: string) => {
-    const proposedAppInstances = new Map<string, AppInstanceProposal>(
+    const proposedAppInstances = new Map<string, AppInstanceJson>(
       this.proposedAppInstances.entries(),
     );
 
-    proposedAppInstances.delete(appIdentityHash);
+    if (proposedAppInstances.has(appIdentityHash)) {
+      proposedAppInstances.delete(appIdentityHash);
+    }
 
     return this.build({
       proposedAppInstances,
@@ -339,7 +353,7 @@ export class StateChannel {
   public setState(
     appInstance: AppInstance,
     state: SolidityValueType,
-    stateTimeout: utils.BigNumber = toBN(appInstance.defaultTimeout),
+    stateTimeout: BigNumber = toBN(appInstance.defaultTimeout),
   ) {
     const appInstances = new Map<string, AppInstance>(this.appInstances.entries());
 
@@ -351,31 +365,6 @@ export class StateChannel {
   }
 
   public installApp(appInstance: AppInstance, tokenIndexedDecrements: TokenIndexedCoinTransferMap) {
-    // Verify appInstance has expected signingkeys
-    const proposal = this.proposedAppInstances.has(appInstance.identityHash)
-      ? this.proposedAppInstances.get(appInstance.identityHash)
-      : undefined;
-
-    if (!proposal) {
-      throw new Error(NO_PROPOSED_APP_INSTANCE_FOR_APP_IDENTITY_HASH(appInstance.identityHash));
-    }
-
-    const [initiator, responder] = this.getSigningKeysFor(
-      proposal.initiatorIdentifier,
-      proposal.responderIdentifier,
-    );
-
-    if (
-      appInstance.initiatorIdentifier !== proposal.initiatorIdentifier ||
-      appInstance.responderIdentifier !== proposal.responderIdentifier
-    ) {
-      throw new Error(
-        `AppInstance passed to installApp has incorrect participants. Got ${JSON.stringify(
-          appInstance.identity.participants,
-        )} but expected ${JSON.stringify([initiator, responder])}`,
-      );
-    }
-
     /// Add modified FB and new AppInstance to appInstances
     const appInstances = new Map<string, AppInstance>(this.appInstances.entries());
 
@@ -413,8 +402,9 @@ export class StateChannel {
   }
 
   toJson(): StateChannelJSON {
-    return deBigNumberifyJson({
+    return deBigNumberifyJson<StateChannelJSON>({
       multisigAddress: this.multisigAddress,
+      chainId: this.chainId,
       addresses: this.addresses,
       userIdentifiers: this.userIdentifiers,
       proposedAppInstances: [...this.proposedAppInstances.entries()],
@@ -451,13 +441,14 @@ export class StateChannel {
     try {
       return new StateChannel(
         json.multisigAddress,
+        json.chainId,
         json.addresses,
         json.userIdentifiers[0], // initiator
         json.userIdentifiers[1], // responder
         new Map(
           [...Object.values(dropNulls(json.proposedAppInstances) || [])].map((proposal): [
             string,
-            AppInstanceProposal,
+            AppInstanceJson,
           ] => {
             return [proposal[0], proposal[1]];
           }),

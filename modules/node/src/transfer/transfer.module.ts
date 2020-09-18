@@ -1,7 +1,6 @@
 import { Module } from "@nestjs/common";
 import { TypeOrmModule } from "@nestjs/typeorm";
 
-import { AppRegistryRepository } from "../appRegistry/appRegistry.repository";
 import { AuthModule } from "../auth/auth.module";
 import { CFCoreModule } from "../cfCore/cfCore.module";
 import { ChannelModule } from "../channel/channel.module";
@@ -11,6 +10,8 @@ import { LoggerModule } from "../logger/logger.module";
 import { MessagingModule } from "../messaging/messaging.module";
 import { LinkedTransferModule } from "../linkedTransfer/linkedTransfer.module";
 import { DepositModule } from "../deposit/deposit.module";
+import { SwapRateModule } from "../swapRate/swapRate.module";
+import { AppInstanceRepository } from "../appInstance/appInstance.repository";
 
 import { transferProviderFactory } from "./transfer.provider";
 import { TransferService } from "./transfer.service";
@@ -28,7 +29,8 @@ import { TransferRepository } from "./transfer.repository";
     LoggerModule,
     LinkedTransferModule,
     MessagingModule,
-    TypeOrmModule.forFeature([ChannelRepository, AppRegistryRepository, TransferRepository]),
+    SwapRateModule,
+    TypeOrmModule.forFeature([ChannelRepository, TransferRepository, AppInstanceRepository]),
   ],
   providers: [TransferService, transferProviderFactory],
 })

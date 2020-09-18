@@ -4,23 +4,33 @@
   "description": "",
   "main": "dist/src/index.js",
   "scripts": {
-    "build": "rm -rf dist && tsc --project tsconfig.json",
-    "start": "node dist/src/index.js"
+    "build": "rm -rf dist && webpack --config ops/webpack.config.js",
+    "start": "node --inspect=0.0.0.0:9229 dist/src/index.js",
+    "start:registry": "node dist/src/registry.js"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@connext/client": "6.7.1",
-    "@connext/store": "6.7.1",
-    "@connext/types": "6.7.1",
-    "@connext/utils": "6.7.1",
+    "@connext/client": "7.3.16",
+    "@connext/contracts": "3.5.0",
+    "@connext/store": "7.3.16",
+    "@connext/types": "7.3.16",
+    "@connext/utils": "7.3.16",
     "axios": "0.19.2",
-    "ethers": "4.0.47",
+    "body-parser": "1.19.0",
+    "ethers": "5.0.7",
+    "express": "4.17.1",
     "interval-promise": "1.4.0",
-    "yargs": "15.3.1"
+    "yargs": "15.4.1"
   },
   "devDependencies": {
+    "@types/yargs": "15.0.5",
+    "babel-loader": "8.1.0",
+    "copy-webpack-plugin": "6.0.3",
+    "ts-loader": "8.0.2",
     "ts-node": "8.10.2",
-    "typescript": "3.9.3"
+    "typescript": "3.9.7",
+    "webpack": "4.44.1",
+    "webpack-cli": "3.3.12"
   }
 }

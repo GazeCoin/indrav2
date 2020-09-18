@@ -3,7 +3,6 @@ import {
   Address,
   AppAction,
   AppInstanceJson,
-  AppInstanceProposal,
   AppRegistry,
   AssetId,
   ChannelMethods,
@@ -13,28 +12,31 @@ import {
   DefaultApp,
   DepositAppName,
   DepositAppState,
+  EventName,
+  EventNames,
+  EventPayload,
+  FreeBalanceResponse,
   IChannelProvider,
   IChannelSigner,
-  IStoreService,
   IConnextClient,
   ILoggerService,
   IMessagingService,
   INodeApiClient,
+  IStoreService,
   MethodNames,
   MethodParams,
   MethodResults,
-  MinimalTransaction,
   NodeResponses,
   PublicParams,
   PublicResults,
   RebalanceProfile,
   SimpleLinkedTransferAppName,
   SimpleTwoPartySwapAppName,
+  SupportedApplicationNames,
   WithdrawalMonitorObject,
   WithdrawAppName,
-  EventName,
-  EventPayload,
-  SupportedApplicationNames,
+  IWatcher,
+  StoredAppChallengeStatus,
 } from "@connext/types";
 import {
   delay,
@@ -42,8 +44,9 @@ import {
   getAddressFromAssetId,
   getSignerAddressFromPublicIdentifier,
   stringify,
+  computeCancelDisputeHash,
 } from "@connext/utils";
-import { Contract, providers, constants, utils } from "ethers";
+import { BigNumber, Contract, providers, constants, utils, BigNumberish } from "ethers";
 
 import {
   DepositController,
@@ -57,18 +60,19 @@ import { InternalClientOptions } from "./types";
 import { NodeApiClient } from "./node";
 
 const { AddressZero } = constants;
-const { bigNumberify, soliditySha256 } = utils;
+const { soliditySha256 } = utils;
 
 export class ConnextClient implements IConnextClient {
   public appRegistry: AppRegistry;
   public channelProvider: IChannelProvider;
   public config: NodeResponses.GetConfig;
   public ethProvider: providers.JsonRpcProvider;
+  public chainId: number;
   public listener: ConnextListener;
   public log: ILoggerService;
   public messaging: IMessagingService;
   public multisigAddress: Address;
-  public network: utils.Network;
+  public network: providers.Network;
   public node: INodeApiClient;
   public nodeIdentifier: string;
   public nodeSignerAddress: string;
@@ -77,6 +81,7 @@ export class ConnextClient implements IConnextClient {
   public signerAddress: string;
   public store: IStoreService;
   public token: Contract;
+  public watcher: IWatcher;
 
   private opts: InternalClientOptions;
 
@@ -92,6 +97,7 @@ export class ConnextClient implements IConnextClient {
     this.channelProvider = opts.channelProvider;
     this.config = opts.config;
     this.ethProvider = opts.ethProvider;
+    this.chainId = opts.chainId;
     this.signer = opts.signer;
     this.log = opts.logger.newContext("ConnextClient");
     this.messaging = opts.messaging;
@@ -99,6 +105,7 @@ export class ConnextClient implements IConnextClient {
     this.node = opts.node;
     this.store = opts.store;
     this.token = opts.token;
+    this.watcher = opts.watcher;
 
     this.signerAddress = this.channelProvider.config.signerAddress;
     this.publicIdentifier = this.channelProvider.config.userIdentifier;
@@ -173,6 +180,7 @@ export class ConnextClient implements IConnextClient {
       logger: this.log,
       store: this.store,
       userIdentifier: this.publicIdentifier,
+      chainId: this.chainId,
     });
     this.channelProvider = this.node.channelProvider;
     this.listener = new ConnextListener(this);
@@ -185,9 +193,27 @@ export class ConnextClient implements IConnextClient {
   };
 
   public requestCollateral = async (
-    tokenAddress: string,
-  ): Promise<NodeResponses.RequestCollateral | void> => {
-    return this.node.requestCollateral(tokenAddress);
+    assetId: string,
+    amount?: BigNumberish,
+  ): Promise<PublicResults.RequestCollateral> => {
+    const requestCollateralResponse = await this.node.requestCollateral(assetId, amount);
+    if (!requestCollateralResponse) {
+      return undefined;
+    }
+    const completed: Promise<FreeBalanceResponse> = new Promise(async (resolve, reject) => {
+      try {
+        await this.waitFor(
+          EventNames.UNINSTALL_EVENT,
+          120_000,
+          (data) => data.appIdentityHash === requestCollateralResponse.depositAppIdentityHash,
+        );
+        const freeBalance = await this.getFreeBalance(assetId);
+        resolve({ freeBalance });
+      } catch (e) {
+        reject(e);
+      }
+    });
+    return { ...requestCollateralResponse, completed: () => completed };
   };
 
   public channelProviderConfig = async (): Promise<ChannelProviderConfig> => {
@@ -204,6 +230,10 @@ export class ConnextClient implements IConnextClient {
     paymentId: string,
   ): Promise<NodeResponses.GetSignedTransfer> => {
     return this.node.fetchSignedTransfer(paymentId);
+  };
+
+  public getGraphTransfer = async (paymentId: string): Promise<NodeResponses.GetSignedTransfer> => {
+    return this.node.fetchGraphTransfer(paymentId);
   };
 
   public getAppRegistry = async (
@@ -253,21 +283,47 @@ export class ConnextClient implements IConnextClient {
   };
 
   ///////////////////////////////////
+  // DISPUTE METHODS
+  public initiateChallenge = (
+    params: PublicParams.InitiateChallenge,
+  ): Promise<PublicResults.InitiateChallenge> => {
+    return this.watcher.initiate(params.appIdentityHash);
+  };
+
+  public cancelChallenge = async (
+    params: PublicParams.CancelChallenge,
+  ): Promise<PublicResults.CancelChallenge> => {
+    const { appInstance } = (await this.getAppInstance(params.appIdentityHash)) || {};
+    if (!appInstance) {
+      throw new Error(`Could not find record of app with hash ${params.appIdentityHash}`);
+    }
+    const cancelHash = computeCancelDisputeHash(
+      appInstance.identityHash,
+      appInstance.latestVersionNumber,
+    );
+    const signature = await this.channelProvider.signMessage(cancelHash);
+    return this.node.cancelChallenge(params.appIdentityHash, signature);
+  };
+
+  ///////////////////////////////////
   // CORE CHANNEL METHODS
 
   public deposit = async (params: PublicParams.Deposit): Promise<PublicResults.Deposit> => {
+    await this.assertFreeBalanceNotDisputed();
     return this.depositController.deposit(params);
   };
 
   public requestDepositRights = async (
     params: PublicParams.RequestDepositRights,
   ): Promise<MethodResults.RequestDepositRights> => {
+    await this.assertFreeBalanceNotDisputed();
     return this.depositController.requestDepositRights(params);
   };
 
   public rescindDepositRights = async (
     params: PublicParams.RescindDepositRights,
   ): Promise<PublicResults.RescindDepositRights> => {
+    await this.assertFreeBalanceNotDisputed();
     return this.depositController.rescindDepositRights(params);
   };
 
@@ -282,8 +338,8 @@ export class ConnextClient implements IConnextClient {
   };
 
   public swap = async (params: PublicParams.Swap): Promise<PublicResults.Swap> => {
-    const res = await this.swapController.swap(params);
-    return res;
+    await this.assertFreeBalanceNotDisputed();
+    return this.swapController.swap(params);
   };
 
   /**
@@ -293,6 +349,7 @@ export class ConnextClient implements IConnextClient {
   public transfer = async (
     params: PublicParams.Transfer,
   ): Promise<PublicResults.ConditionalTransfer> => {
+    await this.assertFreeBalanceNotDisputed();
     return this.createTransferController.createTransfer({
       amount: params.amount,
       assetId: params.assetId || CONVENTION_FOR_ETH_ASSET_ID,
@@ -304,26 +361,30 @@ export class ConnextClient implements IConnextClient {
     }) as Promise<PublicResults.ConditionalTransfer>;
   };
 
-  public withdraw = (params: PublicParams.Withdraw): Promise<PublicResults.Withdraw> => {
+  public withdraw = async (params: PublicParams.Withdraw): Promise<PublicResults.Withdraw> => {
+    await this.assertFreeBalanceNotDisputed();
     return this.withdrawalController.withdraw(params);
   };
 
-  public respondToNodeWithdraw = (appInstance: AppInstanceJson): Promise<void> => {
+  public respondToNodeWithdraw = async (appInstance: AppInstanceJson): Promise<void> => {
+    await this.assertFreeBalanceNotDisputed();
     return this.withdrawalController.respondToNodeWithdraw(appInstance);
   };
 
   public saveWithdrawCommitmentToStore = (
     params: PublicParams.Withdraw,
     signatures: string[],
+    withdrawTx?: string,
   ): Promise<void> => {
-    return this.withdrawalController.saveWithdrawCommitmentToStore(params, signatures);
+    return this.withdrawalController.saveWithdrawCommitmentToStore(params, signatures, withdrawTx);
   };
 
   public resolveCondition = async (
     params: PublicParams.ResolveCondition,
   ): Promise<PublicResults.ResolveCondition> => {
     // paymentId is generated for hashlock transfer
-    if (params.conditionType === ConditionalTransferTypes.HashLockTransfer) {
+    await this.assertFreeBalanceNotDisputed();
+    if (params.conditionType === ConditionalTransferTypes.HashLockTransfer && !params.paymentId) {
       const lockHash = soliditySha256(["bytes32"], [params.preImage]);
       const paymentId = soliditySha256(["address", "bytes32"], [params.assetId, lockHash]);
       params.paymentId = paymentId;
@@ -334,6 +395,7 @@ export class ConnextClient implements IConnextClient {
   public conditionalTransfer = async (
     params: PublicParams.ConditionalTransfer,
   ): Promise<PublicResults.ConditionalTransfer> => {
+    await this.assertFreeBalanceNotDisputed();
     params.assetId = params.assetId || CONVENTION_FOR_ETH_ASSET_ID;
     return this.createTransferController.createTransfer(params);
   };
@@ -364,53 +426,33 @@ export class ConnextClient implements IConnextClient {
   // this function should be called when the user knows a withdrawal should
   // be submitted. if there is no withdrawal expected, this promise will last
   // for the duration of the timeout
-  public watchForUserWithdrawal = async (): Promise<providers.TransactionResponse[]> => {
-    // poll for withdrawal tx submitted to multisig matching tx data
-    const maxBlocks = 15;
+  public watchForUserWithdrawal = async (): Promise<providers.TransactionReceipt[]> => {
     const startingBlock = await this.ethProvider.getBlockNumber();
-    const transactions: providers.TransactionResponse[] = [];
 
-    try {
-      await new Promise((resolve: any, reject: any): any => {
-        this.ethProvider.on(
-          "block",
-          async (blockNumber: number): Promise<void> => {
-            const withdrawals = await this.checkForUserWithdrawals(blockNumber);
-            if (withdrawals.length === 0) {
-              // in the `WithdrawalController` the user does not store the
-              // commitment until `takeAction` happens, so this may be 0
-              // meaning the withdrawal has not been saved to the store yet
-              return;
-            }
-            withdrawals.forEach(async ([storedValue, tx]) => {
-              if (tx) {
-                transactions.push(tx);
-                await this.channelProvider.send(ChannelMethods.chan_setUserWithdrawal, {
-                  withdrawalObject: storedValue,
-                  remove: true,
-                });
-              }
-            });
-            if (transactions.length === withdrawals.length) {
-              // no more to resolve
-              this.ethProvider.removeAllListeners("block");
-              return resolve();
-            }
-            if (blockNumber - startingBlock >= maxBlocks) {
-              this.ethProvider.removeAllListeners("block");
-              return reject(`More than ${maxBlocks} have passed: ${blockNumber - startingBlock}`);
-            }
-          },
-        );
-      });
-    } catch (e) {
-      // if (e.includes(`More than ${maxBlocks} have passed`)) {
-      //   this.log.debug("Retrying node submission");
-      //   await this.retryNodeSubmittedWithdrawal();
-      // }
-      throw new Error(`Error watching for user withdrawal: ${e}`);
-    }
-    return transactions;
+    // TODO: update comment
+    // If this method is called immediately after installing the withdrawal app, the monitor
+    // object might not be in the store yet. We should still wait for at least 1 withdrawal
+    const withdrawalsToFind = await this.getUserWithdrawals();
+    this.log.info(
+      `Watching for ${withdrawalsToFind.length} withdrawal starting at block ${startingBlock}`,
+    );
+    const receipts = await Promise.all(
+      withdrawalsToFind.map(async (storedValue) => {
+        let receipt = await this.ethProvider.getTransactionReceipt(storedValue.withdrawalTx);
+        if (receipt) {
+          // tx was mined
+          await this.channelProvider.send(ChannelMethods.chan_setUserWithdrawal, {
+            withdrawalObject: storedValue,
+            remove: true,
+          });
+          return receipt;
+        }
+        const tx = await this.ethProvider.getTransaction(storedValue.withdrawalTx);
+        receipt = await tx.wait();
+        return receipt;
+      }),
+    );
+    return receipts;
   };
 
   ////////////////////////////////////////
@@ -421,23 +463,19 @@ export class ConnextClient implements IConnextClient {
       await this.channelProvider.send(ChannelMethods.chan_restoreState, {});
       this.log.info(`Found state to restore from store's backup`);
     } catch (e) {
-      const {
-        channel,
-        setupCommitment,
-        setStateCommitments,
-        conditionalCommitments,
-      } = await this.node.restoreState(this.publicIdentifier);
+      const toRestore = await this.node.restoreState(this.publicIdentifier);
+      const { channel, setupCommitment, setStateCommitments, conditionalCommitments } = toRestore;
       if (!channel) {
         throw new Error(`No matching states found by node for ${this.publicIdentifier}`);
       }
-      this.log.info(`Found state to restore from node: ${stringify(channel)}`);
+      this.log.info(`Found state to restore from node: ${stringify(toRestore, false, 0)}`);
       await this.channelProvider.send(ChannelMethods.chan_setStateChannel, {
         state: channel,
         setupCommitment,
         setStateCommitments,
         conditionalCommitments,
       });
-      this.log.info(`Restored channel: ${stringify(await this.getStateChannel())}`);
+      this.log.info(`Restored channel: ${stringify(await this.getStateChannel(), false, 0)}`);
     }
     await this.restart();
   };
@@ -469,11 +507,11 @@ export class ConnextClient implements IConnextClient {
     return this.listener.waitFor(event, timeout, filter);
   }
 
-  // TODO: allow for removing listeners attached via a specific event
-  // by manipulating the context of the events
-
-  public off = () => {
-    this.listener.detach();
+  public off = async () => {
+    await this.messaging.disconnect();
+    await this.listener.detach();
+    await this.channelProvider.removeAllListeners();
+    await delay(500); // give messaging a bit more time to finish disconnecting
   };
 
   public emit = <T extends EventName>(event: T, payload: EventPayload[T]): boolean => {
@@ -527,8 +565,8 @@ export class ConnextClient implements IConnextClient {
         // but need the nodes free balance
         // address in the multisig
         const obj = {};
-        obj[this.nodeSignerAddress] = new utils.BigNumber(0);
-        obj[this.signerAddress] = new utils.BigNumber(0);
+        obj[this.nodeSignerAddress] = BigNumber.from(0);
+        obj[this.signerAddress] = BigNumber.from(0);
         return obj;
       }
       throw e;
@@ -554,21 +592,25 @@ export class ConnextClient implements IConnextClient {
   public getAppInstance = async (
     appIdentityHash: string,
   ): Promise<MethodResults.GetAppInstanceDetails | undefined> => {
-    const err = await this.appNotInstalled(appIdentityHash);
-    if (err) {
-      this.log.warn(err);
-      return undefined;
+    try {
+      const ret = await this.channelProvider.send(MethodNames.chan_getAppInstance, {
+        appIdentityHash,
+      } as MethodParams.GetAppInstanceDetails);
+      return ret;
+    } catch (e) {
+      if (e.message.includes(`No appInstance exists for identity hash`)) {
+        return undefined;
+      }
+      throw e;
     }
-    return this.channelProvider.send(MethodNames.chan_getAppInstance, {
-      appIdentityHash,
-    } as MethodParams.GetAppInstanceDetails);
   };
 
   public takeAction = async (
     appIdentityHash: string,
     action: AppAction,
-    stateTimeout?: utils.BigNumber,
+    stateTimeout?: BigNumber,
   ): Promise<MethodResults.TakeAction> => {
+    await this.assertFreeBalanceNotDisputed();
     // check the app is actually installed
     const err = await this.appNotInstalled(appIdentityHash);
     if (err) {
@@ -599,6 +641,7 @@ export class ConnextClient implements IConnextClient {
   };
 
   public installApp = async (appIdentityHash: string): Promise<MethodResults.Install> => {
+    await this.assertFreeBalanceNotDisputed();
     // check the app isnt actually installed
     const alreadyInstalled = await this.appInstalled(appIdentityHash);
     if (alreadyInstalled) {
@@ -614,6 +657,7 @@ export class ConnextClient implements IConnextClient {
     appIdentityHash: string,
     action?: AppAction,
   ): Promise<MethodResults.Uninstall> => {
+    await this.assertFreeBalanceNotDisputed();
     // check the app is actually installed
     const err = await this.appNotInstalled(appIdentityHash);
     if (err) {
@@ -627,10 +671,14 @@ export class ConnextClient implements IConnextClient {
     } as MethodParams.Uninstall);
   };
 
-  public rejectInstallApp = async (appIdentityHash: string): Promise<MethodResults.Uninstall> => {
+  public rejectInstallApp = async (
+    appIdentityHash: string,
+    reason?: string,
+  ): Promise<MethodResults.Uninstall> => {
     return this.channelProvider.send(MethodNames.chan_rejectInstall, {
       appIdentityHash,
       multisigAddress: this.multisigAddress,
+      reason,
     } as MethodParams.RejectInstall);
   };
 
@@ -642,9 +690,19 @@ export class ConnextClient implements IConnextClient {
   };
 
   public reclaimPendingAsyncTransfers = async (): Promise<void> => {
+    let installedTransfers: NodeResponses.GetPendingAsyncTransfers;
+    const appInstances = await this.getAppInstances();
+    // handle existing installed payment applications
+    for (const app of appInstances) {
+      if (app.meta?.recipient === this.publicIdentifier && app.meta?.encryptedPreImage) {
+        this.log.info(`Found transfer to unlock: ${app.meta.paymentId}`);
+        await this.reclaimPendingAsyncTransfer(app.meta.paymentId, app.meta.encryptedPreImage);
+        this.log.info(`Unlocked transfer: ${app.meta.paymentId}`);
+      }
+    }
     try {
       this.log.info(`Attempting to install pending transfers`);
-      const installedTransfers = await this.node.installPendingTransfers();
+      installedTransfers = await this.node.installPendingTransfers();
       this.log.info(
         `Installed ${installedTransfers.length} transfers, should unlock automatically`,
       );
@@ -681,18 +739,6 @@ export class ConnextClient implements IConnextClient {
   ///////////////////////////////////
   // LOW LEVEL METHODS
 
-  public matchTx = (
-    givenTransaction: utils.Transaction | undefined,
-    expected: MinimalTransaction,
-  ): boolean => {
-    return (
-      givenTransaction &&
-      givenTransaction.to === expected.to &&
-      bigNumberify(givenTransaction.value).eq(expected.value) &&
-      givenTransaction.data === expected.data
-    );
-  };
-
   /**
    * NOTE: this function should *only* be called on `connect()`, and is
    * designed to cleanup channel state in the event of the client going
@@ -709,18 +755,19 @@ export class ConnextClient implements IConnextClient {
    * - installed linked transfer: leave installed for the hub to uninstall
    */
   public cleanupRegistryApps = async (): Promise<void> => {
-    const swapAppRegistryInfo = this.appRegistry.filter(
+    this.log.info(`cleanupRegistryApps starting`);
+    const swapAppRegistryInfo = this.appRegistry.find(
       (app: DefaultApp) => app.name === SimpleTwoPartySwapAppName,
-    )[0];
-    const linkedRegistryInfo = this.appRegistry.filter(
+    );
+    const linkedRegistryInfo = this.appRegistry.find(
       (app: DefaultApp) => app.name === SimpleLinkedTransferAppName,
-    )[0];
-    const withdrawRegistryInfo = this.appRegistry.filter(
+    );
+    const withdrawRegistryInfo = this.appRegistry.find(
       (app: DefaultApp) => app.name === WithdrawAppName,
-    )[0];
-    const depositRegistryInfo = this.appRegistry.filter(
+    );
+    const depositRegistryInfo = this.appRegistry.find(
       (app: DefaultApp) => app.name === DepositAppName,
-    )[0];
+    );
 
     await this.removeHangingProposalsByDefinition([
       swapAppRegistryInfo.appDefinitionAddress,
@@ -736,39 +783,48 @@ export class ConnextClient implements IConnextClient {
       withdrawRegistryInfo.appDefinitionAddress,
     ]);
 
+    await this.uninstallFinalizedApps();
+
+    await this.uninstallExpiredApps();
+
     // handle any existing apps
     await this.handleInstalledDepositApps();
+    this.log.info(`cleanupRegistryApps complete`);
   };
 
   /**
    * Removes all proposals of a give app definition type
    */
   private removeHangingProposalsByDefinition = async (appDefinitions: string[]): Promise<void> => {
+    this.log.info(`removeHangingProposalsByDefinition starting: ${appDefinitions}`);
     // first get all proposed apps
     const { appInstances: proposed } = await this.getProposedAppInstances();
 
     // deal with any proposed swap or linked transfer apps
-    const hangingProposals = proposed.filter((proposal: AppInstanceProposal) =>
+    const hangingProposals = proposed.filter((proposal: AppInstanceJson) =>
       appDefinitions.includes(proposal.appDefinition),
     );
     // remove from `proposedAppInstances`
     for (const hanging of hangingProposals) {
       try {
-        await this.rejectInstallApp(hanging.identityHash);
+        await this.rejectInstallApp(hanging.identityHash, `Removing hanging proposals`);
       } catch (e) {
         this.log.error(
           `Could not remove proposal: ${hanging.identityHash}. Error: ${e.stack || e.message}`,
         );
       }
     }
+    this.log.info(`removeHangingProposalsByDefinition complete!`);
   };
 
   /**
    * Removes all apps of a given app definition type
    */
   private uninstallAllAppsByDefintion = async (appDefinitions: string[]): Promise<void> => {
+    this.log.info(`uninstallAllAppsByDefintion starting...: ${appDefinitions}`);
+
     const apps = (await this.getAppInstances()).filter((app: AppInstanceJson) =>
-      appDefinitions.includes(app.appInterface.addr),
+      appDefinitions.includes(app.appDefinition),
     );
     // TODO: ARJUN there is an edgecase where this will cancel withdrawal
     for (const app of apps) {
@@ -780,10 +836,57 @@ export class ConnextClient implements IConnextClient {
         );
       }
     }
+    this.log.info(`uninstallAllAppsByDefintion complete!`);
+  };
+
+  /**
+   * Removes all apps with a `true` `finalized` property in their `latestState`
+   */
+  private uninstallFinalizedApps = async (): Promise<void> => {
+    this.log.info(`uninstallFinalizedApps starting`);
+    const finalizedApps = (await this.getAppInstances()).filter(
+      (app: AppInstanceJson) => app.latestState.finalized === true,
+    );
+    for (const app of finalizedApps) {
+      try {
+        this.log.info(`Uninstalling finalized app ${app.identityHash}...`);
+        await this.uninstallApp(app.identityHash);
+        this.log.info(`Finished uninstalling finalized app ${app.identityHash}`);
+      } catch (e) {
+        this.log.error(
+          `Could not uninstall app: ${app.identityHash}. Error: ${e.stack || e.message}`,
+        );
+      }
+    }
+    this.log.info(`uninstallFinalizedApps complete!`);
+  };
+
+  /**
+   * Removes all apps with a `true` `finalized` property in their `latestState`
+   */
+  private uninstallExpiredApps = async (): Promise<void> => {
+    this.log.info(`uninstallExpiredApps starting`);
+    const blockHeight = await this.ethProvider.getBlockNumber();
+    const expiredApps = (await this.getAppInstances()).filter(
+      (app: AppInstanceJson) => app.latestState.expiry && app.latestState.expiry >= blockHeight,
+    );
+    for (const app of expiredApps) {
+      try {
+        this.log.info(`Uninstalling expired app ${app.identityHash}...`);
+        await this.uninstallApp(app.identityHash);
+        this.log.info(`Finished uninstalling expired app ${app.identityHash}`);
+      } catch (e) {
+        this.log.error(
+          `Could not uninstall app: ${app.identityHash}. Error: ${e.stack || e.message}`,
+        );
+      }
+    }
+    this.log.info(`uninstallExpiredApps complete!`);
   };
 
   private handleInstalledDepositApps = async () => {
-    const assetIds = this.config.supportedTokenAddresses;
+    this.log.info(`handleInstalledDepositApps starting`);
+    const assetIds = this.config.supportedTokenAddresses[this.chainId];
     for (const assetId of assetIds) {
       const { appIdentityHash } = await this.checkDepositRights({ assetId });
       if (!appIdentityHash) {
@@ -800,7 +903,7 @@ export class ConnextClient implements IConnextClient {
       const currentMultisigBalance =
         assetId === AddressZero
           ? await this.ethProvider.getBalance(this.multisigAddress)
-          : await new Contract(assetId, ERC20.abi, this.ethProvider).functions.balanceOf(
+          : await new Contract(assetId, ERC20.abi, this.ethProvider).balanceOf(
               this.multisigAddress,
             );
 
@@ -819,10 +922,16 @@ export class ConnextClient implements IConnextClient {
       // there is still an active deposit, setup a listener to
       // rescind deposit rights when deposit is sent to multisig
       if (assetId === AddressZero) {
-        this.ethProvider.on(this.multisigAddress, async (balance: utils.BigNumber) => {
+        this.ethProvider.on("block", async () => {
+          const balance =
+            assetId === AddressZero
+              ? await this.ethProvider.getBalance(this.multisigAddress)
+              : await new Contract(assetId, ERC20.abi, this.ethProvider).balanceOf(
+                  this.multisigAddress,
+                );
           if (balance.gt((latestState as DepositAppState).startingMultisigBalance)) {
+            this.ethProvider.removeAllListeners("block");
             await this.rescindDepositRights({ assetId, appIdentityHash });
-            this.ethProvider.removeAllListeners(this.multisigAddress);
           }
         });
         continue;
@@ -830,13 +939,11 @@ export class ConnextClient implements IConnextClient {
 
       new Contract(assetId, ERC20.abi, this.ethProvider).once(
         "Transfer",
-        async (sender: string, recipient: string, amount: utils.BigNumber) => {
+        async (sender: string, recipient: string, amount: BigNumber) => {
           if (recipient === this.multisigAddress && amount.gt(0)) {
-            const bal = await new Contract(
-              assetId,
-              ERC20.abi,
-              this.ethProvider,
-            ).functions.balanceOf(this.multisigAddress);
+            const bal = await new Contract(assetId, ERC20.abi, this.ethProvider).balanceOf(
+              this.multisigAddress,
+            );
             if (bal.gt((latestState as DepositAppState).startingMultisigBalance)) {
               await this.rescindDepositRights({ assetId, appIdentityHash });
             }
@@ -844,6 +951,7 @@ export class ConnextClient implements IConnextClient {
         },
       );
     }
+    this.log.info(`handleInstalledDepositApps complete`);
   };
 
   private appNotInstalled = async (appIdentityHash: string): Promise<string | undefined> => {
@@ -880,44 +988,19 @@ export class ConnextClient implements IConnextClient {
     return undefined;
   };
 
-  private checkForUserWithdrawals = async (
-    inBlock: number,
-  ): Promise<[WithdrawalMonitorObject, providers.TransactionResponse][]> => {
-    const vals = await this.getUserWithdrawals();
-    if (vals.length === 0) {
-      this.log.error("No transaction found in store.");
-      return [];
+  private assertFreeBalanceNotDisputed = async () => {
+    const channel = await this.store.getStateChannel(this.multisigAddress);
+    if (!channel || !channel.freeBalanceAppInstance) {
+      return;
     }
-
-    const getTransactionResponse = async (
-      tx: MinimalTransaction,
-    ): Promise<providers.TransactionResponse | undefined> => {
-      // get the transaction hash that we should be looking for from
-      // the contract method
-      const txsTo = await this.ethProvider.getTransactionCount(tx.to, inBlock);
-      if (txsTo === 0) {
-        return undefined;
-      }
-
-      const block = await this.ethProvider.getBlock(inBlock);
-      const { transactions } = block;
-      if (transactions.length === 0) {
-        return undefined;
-      }
-
-      for (const transactionHash of transactions) {
-        const transaction = await this.ethProvider.getTransaction(transactionHash);
-        if (this.matchTx(transaction, tx)) {
-          return transaction;
-        }
-      }
-      return undefined;
-    };
-
-    const responses = [];
-    for (const val of vals) {
-      responses.push([val, await getTransactionResponse(val.tx)]);
+    const freeBalanceChallenge = await this.store.getAppChallenge(
+      channel.freeBalanceAppInstance.identityHash,
+    );
+    if (
+      freeBalanceChallenge &&
+      freeBalanceChallenge.status !== StoredAppChallengeStatus.NO_CHALLENGE
+    ) {
+      throw new Error(`Free balance app has been disputed, cannot use channel.`);
     }
-    return responses;
   };
 }

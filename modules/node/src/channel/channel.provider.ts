@@ -1,7 +1,7 @@
 import { MethodResults, NodeResponses } from "@connext/types";
 import { MessagingService } from "@connext/messaging";
 import { FactoryProvider } from "@nestjs/common/interfaces";
-import { providers, utils } from "ethers";
+import { utils, constants, BigNumber } from "ethers";
 
 import { AuthService } from "../auth/auth.service";
 import { LoggerService } from "../logger/logger.service";
@@ -42,63 +42,93 @@ class ChannelMessaging extends AbstractMessagingProvider {
     private readonly onchainTransactionRepository: OnchainTransactionRepository,
     private readonly setupCommitmentRepository: SetupCommitmentRepository,
     private readonly setStateCommitmentRepository: SetStateCommitmentRepository,
+    // eslint-disable-next-line max-len
     private readonly conditionalTransactionCommitmentRepository: ConditionalTransactionCommitmentRepository,
   ) {
     super(log, messaging);
   }
 
-  async getChannel(pubId: string, data?: unknown): Promise<NodeResponses.GetChannel | undefined> {
-    return this.channelService.getByUserPublicIdentifier(pubId);
+  async getChannel(
+    pubId: string,
+    chainId: number,
+    data?: unknown,
+  ): Promise<NodeResponses.GetChannel | undefined> {
+    return this.channelService.getByUserPublicIdentifier(pubId, chainId);
   }
 
-  async createChannel(pubId: string): Promise<MethodResults.CreateChannel> {
-    return this.channelService.create(pubId);
+  async createChannel(pubId: string, chainId: number): Promise<MethodResults.CreateChannel> {
+    return this.channelService.create(pubId, chainId);
   }
 
   async requestCollateral(
     userPublicIdentifier: string,
-    data: { assetId?: string },
-  ): Promise<providers.TransactionReceipt | undefined> {
+    chainId: number,
+    data: { assetId?: string; amount?: string },
+  ): Promise<NodeResponses.RequestCollateral> {
     // do not allow clients to specify an amount to collateralize with
-    const channel = await this.channelRepository.findByUserPublicIdentifierOrThrow(
+    const channel = await this.channelRepository.findByUserPublicIdentifierAndChainOrThrow(
       userPublicIdentifier,
+      chainId,
     );
     try {
-      const tx = await this.channelService.rebalance(
-        channel,
-        getAddress(data.assetId),
+      const requestedTarget = data.amount ? BigNumber.from(data.amount) : undefined;
+      const response = await this.channelService.rebalance(
+        channel.multisigAddress,
+        getAddress(data.assetId || constants.AddressZero),
         RebalanceType.COLLATERALIZE,
+        requestedTarget,
       );
-      return tx;
+      return (
+        response && {
+          transaction: response.transaction!,
+          depositAppIdentityHash: response.appIdentityHash!,
+        }
+      );
     } catch (e) {
-      this.log.debug(`Failed to collateralize: ${e.message}`);
+      this.log.warn(`Failed to collateralize: ${e.message}`);
       return undefined;
     }
   }
 
-  async addRebalanceProfile(pubId: string, data: { profile: RebalanceProfile }): Promise<void> {
-    await this.channelService.addRebalanceProfileToChannel(pubId, data.profile);
+  async addRebalanceProfile(
+    pubId: string,
+    chainId: number,
+    data: { profile: RebalanceProfile },
+  ): Promise<void> {
+    await this.channelService.addRebalanceProfileToChannel(pubId, chainId, data.profile);
   }
 
   async getRebalanceProfile(
     pubId: string,
+    chainId: number,
     data: { assetId?: string },
   ): Promise<RebalanceProfile | undefined> {
     const prof = await this.channelRepository.getRebalanceProfileForChannelAndAsset(
       pubId,
+      chainId,
       data.assetId,
     );
     return prof ? prof : undefined;
   }
 
-  async getLatestWithdrawal(pubId: string, data: {}): Promise<OnchainTransaction | undefined> {
-    return this.onchainTransactionRepository.findLatestWithdrawalByUserPublicIdentifier(pubId);
+  async getLatestWithdrawal(
+    pubId: string,
+    chainId: number,
+    data: {},
+  ): Promise<OnchainTransaction | undefined> {
+    return this.onchainTransactionRepository.findLatestWithdrawalByUserPublicIdentifierAndChain(
+      pubId,
+      chainId,
+    );
   }
 
-  async getChannelInformationForRestore(pubId: string): Promise<NodeResponses.ChannelRestore> {
-    const channel = await this.channelService.getStateChannel(pubId);
+  async getChannelInformationForRestore(
+    pubId: string,
+    chainId: number,
+  ): Promise<NodeResponses.ChannelRestore> {
+    const channel = await this.channelService.getStateChannel(pubId, chainId);
     if (!channel) {
-      throw new Error(`No channel found for user: ${pubId}`);
+      throw new Error(`No state channel found for user: ${pubId}`);
     }
     // get setup commitment
     const setupCommitment = await this.setupCommitmentRepository.findByMultisigAddress(
@@ -116,42 +146,41 @@ class ChannelMessaging extends AbstractMessagingProvider {
     const conditionalCommitments = await this.conditionalTransactionCommitmentRepository.findAllActiveCommitmentsByMultisig(
       channel.multisigAddress,
     );
-    const network = await this.configService.getContractAddresses();
     return {
       channel,
       setupCommitment: convertSetupEntityToMinimalTransaction(setupCommitment),
       setStateCommitments: setStateCommitments.map((s) => [s.app.identityHash, setStateToJson(s)]),
       conditionalCommitments: conditionalCommitments.map((c) => [
         c.app.identityHash,
-        convertConditionalCommitmentToJson(c, network),
+        convertConditionalCommitmentToJson(c),
       ]),
     };
   }
 
   async setupSubscriptions(): Promise<void> {
     await super.connectRequestReponse(
-      "*.channel.get",
-      this.authService.parseIdentifier(this.getChannel.bind(this)),
+      `*.${this.configService.getPublicIdentifier()}.*.channel.get`,
+      this.authService.parseIdentifierAndChain(this.getChannel.bind(this)),
     );
     await super.connectRequestReponse(
-      "*.channel.create",
-      this.authService.parseIdentifier(this.createChannel.bind(this)),
+      `*.${this.configService.getPublicIdentifier()}.*.channel.create`,
+      this.authService.parseIdentifierAndChain(this.createChannel.bind(this)),
     );
     await super.connectRequestReponse(
-      "*.channel.request-collateral",
-      this.authService.parseIdentifier(this.requestCollateral.bind(this)),
+      `*.${this.configService.getPublicIdentifier()}.*.channel.request-collateral`,
+      this.authService.parseIdentifierAndChain(this.requestCollateral.bind(this)),
     );
     await super.connectRequestReponse(
-      "*.channel.get-profile",
-      this.authService.parseIdentifier(this.getRebalanceProfile.bind(this)),
+      `*.${this.configService.getPublicIdentifier()}.*.channel.get-profile`,
+      this.authService.parseIdentifierAndChain(this.getRebalanceProfile.bind(this)),
     );
     await super.connectRequestReponse(
-      "*.channel.restore",
-      this.authService.parseIdentifier(this.getChannelInformationForRestore.bind(this)),
+      `*.${this.configService.getPublicIdentifier()}.*.channel.restore`,
+      this.authService.parseIdentifierAndChain(this.getChannelInformationForRestore.bind(this)),
     );
     await super.connectRequestReponse(
-      "*.channel.latestWithdrawal",
-      this.authService.parseIdentifier(this.getLatestWithdrawal.bind(this)),
+      `*.${this.configService.getPublicIdentifier()}.*.channel.latestWithdrawal`,
+      this.authService.parseIdentifierAndChain(this.getLatestWithdrawal.bind(this)),
     );
   }
 }

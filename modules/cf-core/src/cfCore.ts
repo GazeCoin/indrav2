@@ -1,7 +1,6 @@
 import {
   Address,
-  AppInstanceProposal,
-  ContractAddresses,
+  AppInstanceJson,
   EventNames,
   IChannelSigner,
   ILockService,
@@ -14,7 +13,7 @@ import {
   MethodParams,
   MiddlewareContext,
   MinimalTransaction,
-  NetworkContext,
+  NetworkContexts,
   Opcode,
   ProtocolMessage,
   ProtocolMessageData,
@@ -23,13 +22,12 @@ import {
   STORE_SCHEMA_VERSION,
   ValidationMiddleware,
   EventName,
+  IOnchainTransactionService,
 } from "@connext/types";
-import { delay, nullLogger } from "@connext/utils";
-import { providers } from "ethers";
+import { abrv, delay, nullLogger, stringify } from "@connext/utils";
 import EventEmitter from "eventemitter3";
-import { Memoize } from "typescript-memoize";
 
-import { IO_SEND_AND_WAIT_TIMEOUT } from "./constants";
+import { UNASSIGNED_SEQ_NO, IO_SEND_AND_WAIT_TIMEOUT } from "./constants";
 import { Deferred } from "./deferred";
 import { SetStateCommitment, ConditionalTransactionCommitment } from "./ethereum";
 import { ProtocolRunner } from "./machine";
@@ -50,8 +48,6 @@ export class CFCore {
   private readonly ioSendDeferrals = new Map<string, Deferred<ProtocolMessage>>();
   private readonly protocolRunner: ProtocolRunner;
 
-  public readonly networkContext: NetworkContext;
-
   /**
    * These properties don't have initializers in the constructor, since they must be initialized
    * asynchronously. This is done via the `asynchronouslySetupUsingRemoteServices` function.
@@ -65,25 +61,23 @@ export class CFCore {
   static create(
     messagingService: IMessagingService,
     storeService: IStoreService,
-    contractAddresses: ContractAddresses,
-    nodeConfig: NodeConfig,
-    provider: providers.JsonRpcProvider,
+    networkContexts: NetworkContexts,
     signer: IChannelSigner,
     lockService: ILockService,
     blocksNeededForConfirmation?: number,
     logger?: ILoggerService,
     syncOnStart: boolean = true,
+    onchainTransactionService: IOnchainTransactionService | undefined = undefined,
   ): Promise<CFCore> {
     const node = new CFCore(
       signer,
       messagingService,
       storeService,
-      nodeConfig,
-      provider,
-      contractAddresses,
+      networkContexts,
       blocksNeededForConfirmation,
       logger,
       lockService,
+      onchainTransactionService,
     );
 
     return node.asynchronouslySetupUsingRemoteServices(syncOnStart);
@@ -93,32 +87,31 @@ export class CFCore {
     private readonly signer: IChannelSigner,
     private readonly messagingService: IMessagingService,
     private readonly storeService: IStoreService,
-    private readonly nodeConfig: NodeConfig,
-    private readonly provider: providers.JsonRpcProvider,
-    public readonly contractAddresses: ContractAddresses,
+    public readonly networkContexts: NetworkContexts,
     public readonly blocksNeededForConfirmation: number = REASONABLE_NUM_BLOCKS_TO_WAIT,
     public readonly log: ILoggerService = nullLogger,
     private readonly lockService: ILockService,
+    private readonly transactionService: IOnchainTransactionService | undefined = undefined,
   ) {
     this.log = log.newContext("CFCore");
-    this.networkContext = { contractAddresses: this.contractAddresses, provider: this.provider };
     this.incoming = new EventEmitter();
     this.outgoing = new EventEmitter();
     this.protocolRunner = this.buildProtocolRunner();
+    this.log.info(`Using network contexts with chain ids: ${Object.keys(networkContexts)}`);
   }
 
-  @Memoize()
   get signerAddress(): Address {
     return this.signer.address;
   }
 
-  @Memoize()
   get publicIdentifier(): PublicIdentifier {
     return this.signer.publicIdentifier;
   }
 
   private async asynchronouslySetupUsingRemoteServices(syncOnStart: boolean): Promise<CFCore> {
-    this.log.info(`CFCore signer address: ${await this.signer.getAddress()}`);
+    this.log.info(
+      `Signer address: ${this.signer.address} | public id: ${this.signer.publicIdentifier}`,
+    );
     this.requestHandler = new RequestHandler(
       this.publicIdentifier,
       this.incoming,
@@ -126,21 +119,33 @@ export class CFCore {
       this.storeService,
       this.messagingService,
       this.protocolRunner,
-      this.networkContext,
+      this.networkContexts,
       this.signer,
       this.blocksNeededForConfirmation!,
       this.lockService,
       this.log,
+      this.transactionService,
     );
     this.registerMessagingConnection();
     this.rpcRouter = new RpcRouter(this.requestHandler);
     this.requestHandler.injectRouter(this.rpcRouter);
+    const channels = await this.storeService.getAllChannels();
+    this.log.info(
+      `Given store contains ${channels.length} channels: [${
+        channels.length > 10
+          ? channels
+              .map((c) => abrv(c.multisigAddress))
+              .slice(0, 10)
+              .toString() + ", ..."
+          : channels.map((c) => abrv(c.multisigAddress))
+      }]`,
+    );
     if (!syncOnStart) {
       return this;
     }
-    const channels = await this.storeService.getAllChannels();
     await Promise.all(
       channels.map(async (channel) => {
+        this.log.info(`Syncing channel ${channel.multisigAddress}`);
         await this.rpcRouter.dispatch({
           methodName: MethodNames.chan_sync,
           parameters: { multisigAddress: channel.multisigAddress } as MethodParams.Sync,
@@ -161,12 +166,23 @@ export class CFCore {
     }
     this.protocolRunner.register(opcode, async (args: [ProtocolName, MiddlewareContext]) => {
       const [protocol, context] = args;
-      try {
-        await middleware(protocol, context);
-        return undefined;
-      } catch (e) {
-        return e.stack || e.message;
-      }
+      const middlewareRet = await Promise.race([
+        new Promise((resolve) => {
+          middleware(protocol, context)
+            .catch((e) => resolve(e.stack || e.message))
+            .then(() => resolve(undefined));
+        }),
+        new Promise((resolve) => {
+          delay(IO_SEND_AND_WAIT_TIMEOUT).then(() =>
+            resolve(
+              `Failed to execute validation middleware for ${protocol} within ${
+                IO_SEND_AND_WAIT_TIMEOUT / 1000
+              }s.`,
+            ),
+          );
+        }),
+      ]);
+      return middlewareRet;
     });
   }
 
@@ -176,7 +192,7 @@ export class CFCore {
    */
   private buildProtocolRunner(): ProtocolRunner {
     const protocolRunner = new ProtocolRunner(
-      this.networkContext,
+      this.networkContexts,
       this.storeService,
       this.log.newContext("CF-ProtocolRunner"),
     );
@@ -193,22 +209,37 @@ export class CFCore {
 
     protocolRunner.register(
       Opcode.IO_SEND,
-      async (args: [ProtocolMessageData, StateChannel, AppInstance]) => {
-        const [data, channel, appContext] = args;
+      async (args: [ProtocolMessageData, StateChannel, AppInstance, any]) => {
+        const [data, channel, appContext, protocolMeta] = args;
+
+        // check if the protocol start time exists within the message
+        // and if it is a final protocol message (see note in
+        // types/messaging.ts)
+        const { prevMessageReceived, seq } = data;
+        if (prevMessageReceived && seq === UNASSIGNED_SEQ_NO) {
+          const diff = Date.now() - prevMessageReceived;
+          if (diff > IO_SEND_AND_WAIT_TIMEOUT) {
+            throw new Error(
+              `Execution took longer than ${
+                IO_SEND_AND_WAIT_TIMEOUT / 1000
+              }s. Aborting message: ${stringify(data)}`,
+            );
+          }
+        }
 
         await this.messagingService.send(data.to, {
           data,
           from: this.publicIdentifier,
           type: EventNames.PROTOCOL_MESSAGE_EVENT,
-        } as ProtocolMessage);
+        });
 
-        return { channel, appContext };
+        return { channel, appContext, protocolMeta };
       },
     );
 
     protocolRunner.register(
       Opcode.IO_SEND_AND_WAIT,
-      async (args: [ProtocolMessageData, StateChannel, AppInstance]) => {
+      async (args: [ProtocolMessageData, StateChannel?, AppInstance?]) => {
         const [data, channel, appContext] = args;
 
         const deferral = new Deferred<ProtocolMessage>();
@@ -221,12 +252,15 @@ export class CFCore {
           data,
           from: this.publicIdentifier,
           type: EventNames.PROTOCOL_MESSAGE_EVENT,
-        } as ProtocolMessage);
+        });
 
         // 10 seconds is the default lock acquiring time time
-        const msg = await Promise.race([counterpartyResponse, delay(IO_SEND_AND_WAIT_TIMEOUT)]);
+        const msg = await Promise.race<ProtocolMessage | void>([
+          counterpartyResponse,
+          delay(IO_SEND_AND_WAIT_TIMEOUT),
+        ]);
 
-        if (!msg || !("data" in (msg as ProtocolMessage))) {
+        if (!msg || !msg.data) {
           throw new Error(
             `IO_SEND_AND_WAIT timed out after ${
               IO_SEND_AND_WAIT_TIMEOUT / 1000
@@ -240,7 +274,20 @@ export class CFCore {
         // per counterparty at the moment.
         this.ioSendDeferrals.delete(data.processID);
 
-        return { data: (msg as ProtocolMessage).data, channel, appContext };
+        // Check if there is an error reason in the response, and throw
+        // the error here if so
+        // NOTE: only errors that are thrown from protocol execution when the
+        // counterparty is waiting for a response should be sent
+        const { error } = msg.data;
+        if (error) {
+          throw new Error(
+            `Counterparty execution of ${
+              data.protocol
+            } failed: ${error}. \nCounterparty was responding to: ${stringify(data)}`,
+          );
+        }
+
+        return { message: msg, channel, appContext };
       },
     );
 
@@ -249,11 +296,12 @@ export class CFCore {
       async (
         args: [
           PersistStateChannelType,
-          StateChannel,
-          (MinimalTransaction | SetStateCommitment | ConditionalTransactionCommitment)[],
+          StateChannel, // post protocol channel
+          (MinimalTransaction | SetStateCommitment | ConditionalTransactionCommitment)[], // signed commitments
+          AppInstance[], // affected apps (multiple for reject)
         ],
       ) => {
-        const [type, stateChannel, signedCommitments] = args;
+        const [type, stateChannel, signedCommitments, affectedApps] = args;
         switch (type) {
           case PersistStateChannelType.CreateChannel: {
             const [setup, freeBalance] = signedCommitments as [
@@ -270,61 +318,103 @@ export class CFCore {
             break;
           }
 
+          case PersistStateChannelType.SyncRejectedProposals: {
+            // NOTE: this relies on `removeAppProposal` being idempotent
+            // and functional concurrent writes of the store
+            await Promise.all(
+              affectedApps.map((app) =>
+                this.storeService.removeAppProposal(
+                  stateChannel.multisigAddress,
+                  app.identityHash,
+                  stateChannel.toJson(),
+                ),
+              ),
+            );
+            break;
+          }
+
           case PersistStateChannelType.SyncProposal: {
-            const [setState] = signedCommitments as [SetStateCommitment];
-            const proposal = stateChannel.proposedAppInstances.get(setState.appIdentityHash);
-            if (!proposal) {
-              throw new Error("Could not find proposal in post protocol channel");
+            const [setState, conditional] = signedCommitments as [
+              SetStateCommitment,
+              ConditionalTransactionCommitment,
+            ];
+            const [appContext] = affectedApps;
+            if (!appContext || !setState || !conditional) {
+              // adding a rejected proposal
+              await this.storeService.updateNumProposedApps(
+                stateChannel.multisigAddress,
+                stateChannel.numProposedApps,
+                stateChannel.toJson(),
+              );
+              break;
             }
             // this is adding a proposal
             await this.storeService.createAppProposal(
               stateChannel.multisigAddress,
-              proposal,
+              appContext.toJson(),
               stateChannel.numProposedApps,
               setState.toJson(),
+              conditional.toJson(),
+              stateChannel.toJson(),
             );
             break;
           }
-          case PersistStateChannelType.NoChange: {
-            break;
-          }
-          case PersistStateChannelType.SyncFreeBalance: {
-            const [setState, conditional] = signedCommitments as [
-              SetStateCommitment,
-              ConditionalTransactionCommitment | undefined,
-            ];
-            if (!conditional) {
-              // this was an uninstall, so remove app instance
-              await this.storeService.removeAppInstance(
-                stateChannel.multisigAddress,
-                setState.appIdentityHash,
-                stateChannel.freeBalance.toJson(),
-                setState.toJson(),
-              );
-            } else {
-              // this was an install, add app and remove proposals
-              await this.storeService.createAppInstance(
-                stateChannel.multisigAddress,
-                stateChannel.getAppInstanceByAppSeqNo(stateChannel.numProposedApps).toJson(),
-                stateChannel.freeBalance.toJson(),
-                setState.toJson(),
-                conditional.toJson(),
+
+          case PersistStateChannelType.SyncInstall: {
+            const [setState] = signedCommitments as [SetStateCommitment];
+            const [appContext] = affectedApps;
+            if (!appContext || !setState) {
+              throw new Error(
+                "Could not find sufficient information to store channel with installed app from sync method. Check middlewares.",
               );
             }
+            await this.storeService.createAppInstance(
+              stateChannel.multisigAddress,
+              appContext.toJson(),
+              stateChannel.freeBalance.toJson(),
+              setState.toJson(),
+              stateChannel.toJson(),
+            );
             break;
           }
+
+          case PersistStateChannelType.SyncUninstall: {
+            const [setState] = signedCommitments as [SetStateCommitment];
+            const [appContext] = affectedApps;
+            if (!appContext || !setState) {
+              throw new Error(
+                `Could not find sufficient information to store channel with uninstalled app from sync method. Check middlewares. Missing appContext: ${!!appContext}, missing setState: ${!!setState}`,
+              );
+            }
+            await this.storeService.removeAppInstance(
+              stateChannel.multisigAddress,
+              appContext.toJson(),
+              stateChannel.freeBalance.toJson(),
+              setState.toJson(),
+              stateChannel.toJson(),
+            );
+            break;
+          }
+
           case PersistStateChannelType.SyncAppInstances: {
             for (const commitment of signedCommitments as SetStateCommitment[]) {
               await this.storeService.updateAppInstance(
                 stateChannel.multisigAddress,
                 stateChannel.appInstances.get(commitment.appIdentityHash)!.toJson(),
                 commitment.toJson(),
+                stateChannel.toJson(),
               );
             }
             break;
           }
+
+          case PersistStateChannelType.NoChange: {
+            break;
+          }
+
           default: {
-            throw new Error(`Unrecognized persist state channel type: ${type}`);
+            const c: never = type;
+            throw new Error(`Unrecognized persist state channel type: ${stringify(c)}`);
           }
         }
         return { channel: stateChannel };
@@ -337,7 +427,7 @@ export class CFCore {
         args: [
           PersistAppType,
           StateChannel,
-          AppInstance | AppInstanceProposal,
+          AppInstance | AppInstanceJson,
           SetStateCommitment,
           ConditionalTransactionCommitment,
         ],
@@ -351,20 +441,26 @@ export class CFCore {
         ] = args;
         const { multisigAddress, numProposedApps, freeBalance } = postProtocolChannel;
         const { identityHash } = app;
-        let appContext: AppInstance | AppInstanceProposal | undefined;
+        let appContext: AppInstance | AppInstanceJson | undefined;
         switch (type) {
           case PersistAppType.CreateProposal: {
             await this.storeService.createAppProposal(
               multisigAddress,
-              app as AppInstanceProposal,
+              app as AppInstanceJson,
               numProposedApps,
               signedSetStateCommitment.toJson(),
+              signedConditionalTxCommitment.toJson(),
+              postProtocolChannel.toJson(),
             );
             break;
           }
 
           case PersistAppType.RemoveProposal: {
-            await this.storeService.removeAppProposal(multisigAddress, identityHash);
+            await this.storeService.removeAppProposal(
+              multisigAddress,
+              identityHash,
+              postProtocolChannel.toJson(),
+            );
             break;
           }
 
@@ -374,7 +470,7 @@ export class CFCore {
               (app as AppInstance).toJson(),
               freeBalance.toJson(),
               signedSetStateCommitment.toJson(),
-              signedConditionalTxCommitment.toJson(),
+              postProtocolChannel.toJson(),
             );
             break;
           }
@@ -384,6 +480,7 @@ export class CFCore {
               multisigAddress,
               (app as AppInstance).toJson(),
               signedSetStateCommitment.toJson(),
+              postProtocolChannel.toJson(),
             );
             break;
           }
@@ -391,9 +488,10 @@ export class CFCore {
           case PersistAppType.RemoveInstance: {
             await this.storeService.removeAppInstance(
               multisigAddress,
-              identityHash,
+              (app as AppInstance).toJson(),
               freeBalance.toJson(),
               signedSetStateCommitment.toJson(),
+              postProtocolChannel.toJson(),
             );
             // final state of app before uninstall
             appContext = app;
@@ -401,7 +499,11 @@ export class CFCore {
           }
 
           case PersistAppType.Reject: {
-            await this.storeService.removeAppProposal(multisigAddress, identityHash);
+            await this.storeService.removeAppProposal(
+              multisigAddress,
+              identityHash,
+              postProtocolChannel.toJson(),
+            );
             break;
           }
 
@@ -437,6 +539,10 @@ export class CFCore {
    */
   off(event: EventName | MethodName, callback?: (res: any) => void) {
     this.rpcRouter.unsubscribe(event, callback ? async (res: any) => callback(res) : undefined);
+  }
+
+  removeAllListeners() {
+    this.rpcRouter.unsubscribeAll();
   }
 
   /**
@@ -479,8 +585,14 @@ export class CFCore {
     this.messagingService.onReceive(
       this.publicIdentifier,
       async (msg: ProtocolEventMessage<any>) => {
-        await this.handleReceivedMessage(msg);
-        this.rpcRouter.emit(msg.type, msg, "outgoing");
+        try {
+          await this.handleReceivedMessage(msg);
+          this.rpcRouter.emit(msg.type, msg, "outgoing");
+        } catch (e) {
+          // No need to crash the entire cfCore if we receive an invalid message.
+          // Just log & wait for the next one
+          this.log.error(`Failed to handle ${msg.type} message: ${e.message}`);
+        }
       },
     );
   }

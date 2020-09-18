@@ -1,3 +1,4 @@
+import { getMemoryStore } from "@connext/store";
 import {
   EventNames,
   IConnextClient,
@@ -6,37 +7,36 @@ import {
   IStoreService,
   CF_METHOD_TIMEOUT,
 } from "@connext/types";
-import { delay } from "@connext/utils";
+import { delay, getRandomChannelSigner } from "@connext/utils";
+import { BigNumber } from "ethers";
 import * as lolex from "lolex";
 
 import {
   asyncTransferAsset,
   createClient,
   createClientWithMessagingLimits,
+  ethProviderUrl,
   expect,
   fundChannel,
+  getTestLoggers,
   MessagingEventData,
   RECEIVED,
   REQUEST,
   requestCollateral,
+  SEND,
   TestMessagingService,
   TOKEN_AMOUNT,
   TOKEN_AMOUNT_SM,
-  env,
-  SEND,
 } from "../util";
-import { utils } from "ethers";
-import { getRandomChannelSigner } from "@connext/utils";
-import { getMemoryStore } from "@connext/store";
 
 const fundForTransfers = async (
   receiverClient: IConnextClient,
   senderClient: IConnextClient,
-  amount: utils.BigNumber = TOKEN_AMOUNT,
+  amount: BigNumber = TOKEN_AMOUNT,
   assetId?: string,
 ): Promise<void> => {
   // make sure the tokenAddress is set
-  const tokenAddress = senderClient.config.contractAddresses.Token!;
+  const tokenAddress = senderClient.config.contractAddresses[senderClient.chainId].Token!;
   await fundChannel(senderClient, amount, assetId || tokenAddress);
   await requestCollateral(receiverClient, assetId || tokenAddress, true);
 };
@@ -60,36 +60,40 @@ const recreateReceiverAndRetryTransfer = async (
   transferParams: any,
 ) => {
   const { amount, assetId } = transferParams;
-  await receiverClient.messaging.disconnect();
+  await receiverClient.off();
   // Add delay to make sure messaging properly disconnects
   await delay(1000);
   const newClient = await createClient({ signer: receiverSigner, store: receiverStore });
-
   // Check that client can recover and continue
   await asyncTransferAsset(senderClient, newClient, amount, assetId);
 };
 
-describe("Async transfer offline tests", () => {
+const name = "Offline Async Transfers";
+const { timeElapsed } = getTestLoggers(name);
+describe.skip(name, () => {
   let clock: any;
-  let senderClient: IConnextClient;
   let receiverClient: IConnextClient;
+  let senderClient: IConnextClient;
   let signer: IChannelSigner;
+  let start: number;
   let store: IStoreService;
 
   beforeEach(async () => {
-    signer = getRandomChannelSigner(env.ethProviderUrl);
+    start = Date.now();
+    signer = getRandomChannelSigner(ethProviderUrl);
     store = getMemoryStore();
     clock = lolex.install({
       shouldAdvanceTime: true,
       advanceTimeDelta: 1,
       now: Date.now(),
     });
+    timeElapsed("beforeEach complete", start);
   });
 
   afterEach(async () => {
     clock && clock.reset && clock.reset();
-    await senderClient.messaging.disconnect();
-    await receiverClient.messaging.disconnect();
+    await senderClient.off();
+    await receiverClient.off();
   });
 
   /**
@@ -98,7 +102,7 @@ describe("Async transfer offline tests", () => {
    * Client calls `resolve` on node, node will install and propose, client
    * will take action with recipient.
    */
-  it.skip("sender installs transfer successfully, receiver proposes install but node is offline", async () => {
+  it("sender installs transfer successfully, receiver proposes install but node is offline", async () => {
     // create the sender client and receiver clients + fund
     senderClient = await createClientWithMessagingLimits();
     // 1 successful proposal (balance refund)
@@ -108,7 +112,7 @@ describe("Async transfer offline tests", () => {
       signer,
       store,
     });
-    const tokenAddress = senderClient.config.contractAddresses.Token!;
+    const tokenAddress = senderClient.config.contractAddresses[senderClient.chainId].Token!;
     await fundForTransfers(receiverClient, senderClient);
     (receiverClient.messaging as TestMessagingService).on(
       REQUEST,
@@ -134,9 +138,9 @@ describe("Async transfer offline tests", () => {
    * Ideally, the node takes action +  uninstalls these apps on `connect`,
    * and money is returned to the hubs channel (redeemed payment)
    */
-  it.skip("sender installs, receiver installs, takesAction, then uninstalls. Node takes action with sender then tries to uninstall, but sender is offline then comes online later (sender offline for uninstall)", async () => {
-    const senderSigner = getRandomChannelSigner(env.ethProviderUrl);
-    const receiverSigner = getRandomChannelSigner(env.ethProviderUrl);
+  it("sender installs, receiver installs, takesAction, then uninstalls. Node takes action with sender then tries to uninstall, but sender is offline then comes online later (sender offline for uninstall)", async () => {
+    const senderSigner = getRandomChannelSigner(ethProviderUrl);
+    const receiverSigner = getRandomChannelSigner(ethProviderUrl);
     // create the sender client and receiver clients + fund
     senderClient = await createClientWithMessagingLimits({
       ceiling: { [SEND]: 1 }, // for deposit app
@@ -144,7 +148,7 @@ describe("Async transfer offline tests", () => {
       signer: senderSigner,
     });
     receiverClient = await createClientWithMessagingLimits({ signer: receiverSigner });
-    const tokenAddress = senderClient.config.contractAddresses.Token!;
+    const tokenAddress = senderClient.config.contractAddresses[senderClient.chainId].Token!;
     await fundForTransfers(receiverClient, senderClient);
 
     // disconnect messaging on take action event, ensuring transfer received
@@ -156,7 +160,7 @@ describe("Async transfer offline tests", () => {
       ),
       new Promise((resolve: Function) => {
         senderClient.once(EventNames.UPDATE_STATE_EVENT, async (data) => {
-          await senderClient.messaging.disconnect();
+          await senderClient.off();
           resolve();
         });
       }),

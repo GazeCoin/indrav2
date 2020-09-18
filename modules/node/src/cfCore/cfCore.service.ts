@@ -1,9 +1,12 @@
 import { CFCore } from "@connext/cf-core";
-import { DEFAULT_APP_TIMEOUT, WithdrawCommitment } from "@connext/apps";
+import {
+  DEFAULT_APP_TIMEOUT,
+  WithdrawCommitment,
+  AppRegistry as RegistryOfApps,
+} from "@connext/apps";
 import {
   AppAction,
   AppInstanceJson,
-  AppInstanceProposal,
   AssetId,
   ConnextNodeStorePrefix,
   CONVENTION_FOR_ETH_ASSET_ID,
@@ -16,7 +19,11 @@ import {
   EventName,
   CF_METHOD_TIMEOUT,
   ProtocolEventMessage,
+  DefaultApp,
+  Address,
   SupportedApplicationNames,
+  AppRegistry,
+  StoredAppChallengeStatus,
 } from "@connext/types";
 import {
   getSignerAddressFromPublicIdentifier,
@@ -25,23 +32,38 @@ import {
   TypedEmitter,
 } from "@connext/utils";
 import { Inject, Injectable } from "@nestjs/common";
-import { constants, utils } from "ethers";
+import { MessagingService } from "@connext/messaging";
+import { BigNumber, constants } from "ethers";
 
-import { AppRegistryRepository } from "../appRegistry/appRegistry.repository";
 import { ConfigService } from "../config/config.service";
 import { LoggerService } from "../logger/logger.service";
 import { CFCoreProviderId, MessagingProviderId, TIMEOUT_BUFFER } from "../constants";
 import { Channel } from "../channel/channel.entity";
 
 import { CFCoreRecordRepository } from "./cfCore.repository";
-import { AppType } from "../appInstance/appInstance.entity";
-import { AppInstanceRepository } from "../appInstance/appInstance.repository";
-import { MessagingService } from "@connext/messaging";
+import { ChannelSerializer } from "../channel/channel.repository";
 
 const { Zero } = constants;
 
-Injectable();
+export const assertNoChallenges = (channel: Channel) => {
+  if (!channel.challenges) {
+    return;
+  }
+  const uncancelled = channel.challenges.filter(
+    (c) => c.status !== StoredAppChallengeStatus.NO_CHALLENGE,
+  );
+  if (uncancelled.length > 0) {
+    throw new Error(
+      `Cannot interact with channel, channel has active challenges: ${stringify(
+        channel.challenges,
+      )}`,
+    );
+  }
+};
+
+@Injectable()
 export class CFCoreService {
+  private appRegistryMap: Map<string, DefaultApp> = new Map();
   public emitter: TypedEmitter;
   constructor(
     @Inject(MessagingProviderId) private readonly messagingService: MessagingService,
@@ -49,8 +71,6 @@ export class CFCoreService {
     private readonly configService: ConfigService,
     @Inject(CFCoreProviderId) public readonly cfCore: CFCore,
     private readonly cfCoreRepository: CFCoreRecordRepository,
-    private readonly appRegistryRepository: AppRegistryRepository,
-    private readonly appInstanceRepository: AppInstanceRepository,
   ) {
     this.emitter = new TypedEmitter();
     this.cfCore = cfCore;
@@ -114,12 +134,16 @@ export class CFCoreService {
     return getStateChannelRes.result.result;
   }
 
-  async createChannel(counterpartyIdentifier: string): Promise<MethodResults.CreateChannel> {
+  async createChannel(
+    counterpartyIdentifier: string,
+    chainId: number,
+  ): Promise<MethodResults.CreateChannel> {
     const params = {
       id: Date.now(),
       methodName: MethodNames.chan_create,
       parameters: {
         owners: [this.cfCore.publicIdentifier, counterpartyIdentifier],
+        chainId,
       } as MethodParams.CreateChannel,
     };
     this.logCfCoreMethodStart(MethodNames.chan_create, params.parameters);
@@ -144,32 +168,33 @@ export class CFCoreService {
 
   async createWithdrawCommitment(
     params: PublicParams.Withdraw,
-    multisigAddress: string,
+    channel: Channel,
   ): Promise<WithdrawCommitment> {
+    assertNoChallenges(channel);
     const amount = toBN(params.amount);
     const { assetId, nonce, recipient } = params;
-    const { data: channel } = await this.getStateChannel(multisigAddress);
-    const contractAddresses = await this.configService.getContractAddresses(
-      (await this.configService.getEthNetwork()).chainId.toString(),
-    );
+    const json = ChannelSerializer.toJSON(channel)!;
+    const contractAddresses = this.configService.getContractAddresses(channel.chainId);
     const multisigOwners = [
-      getSignerAddressFromPublicIdentifier(channel.userIdentifiers[0]),
-      getSignerAddressFromPublicIdentifier(channel.userIdentifiers[1]),
+      getSignerAddressFromPublicIdentifier(json.userIdentifiers[0]),
+      getSignerAddressFromPublicIdentifier(json.userIdentifiers[1]),
     ];
     return new WithdrawCommitment(
       contractAddresses,
       channel.multisigAddress,
       multisigOwners,
-      recipient,
-      assetId,
+      recipient!,
+      assetId!,
       amount,
-      nonce,
+      nonce!,
     );
   }
 
   async proposeInstallApp(
     params: MethodParams.ProposeInstall,
+    channel: Channel,
   ): Promise<MethodResults.ProposeInstall> {
+    assertNoChallenges(channel);
     this.logCfCoreMethodStart(MethodNames.chan_proposeInstall, params);
     const proposeRes = await this.cfCore.rpcRouter.dispatch({
       id: Date.now(),
@@ -183,18 +208,15 @@ export class CFCoreService {
   async proposeAndWaitForInstallApp(
     channel: Channel,
     initialState: any,
-    initiatorDeposit: utils.BigNumber,
+    initiatorDeposit: BigNumber,
     initiatorDepositAssetId: AssetId,
-    responderDeposit: utils.BigNumber,
+    responderDeposit: BigNumber,
     responderDepositAssetId: AssetId,
-    app: string,
+    appInfo: DefaultApp,
     meta: object = {},
-    stateTimeout: utils.BigNumber = Zero,
+    stateTimeout: BigNumber = Zero,
   ): Promise<MethodResults.ProposeInstall | undefined> {
-    const network = await this.configService.getEthNetwork();
-
-    const appInfo = await this.appRegistryRepository.findByNameAndNetwork(app, network.chainId);
-
+    assertNoChallenges(channel);
     // Decrement timeout so that receiver app MUST finalize before sender app
     // See: https://github.com/connext/indra/issues/1046
     const timeout = DEFAULT_APP_TIMEOUT.sub(TIMEOUT_BUFFER);
@@ -225,15 +247,15 @@ export class CFCoreService {
     };
     this.log.info(`Attempting to install ${appInfo.name} in channel ${channel.multisigAddress}`);
 
-    let proposeRes;
+    let proposeRes: MethodResults.ProposeInstall;
     try {
-      proposeRes = await this.proposeInstallApp(params);
+      proposeRes = await this.proposeInstallApp(params, channel);
     } catch (err) {
-      this.log.error(`Error installing app, proposal failed. Params: ${JSON.stringify(params)}`);
+      this.log.error(`Error proposing app ${err.message}. Params: ${JSON.stringify(params)}`);
       return undefined;
     }
 
-    const raceRes = await Promise.race([
+    const raceRes: any = await Promise.race([
       new Promise(async (resolve, reject) => {
         try {
           await this.emitter.waitFor(
@@ -249,7 +271,7 @@ export class CFCoreService {
       this.emitter.waitFor(
         EventNames.INSTALL_FAILED_EVENT,
         CF_METHOD_TIMEOUT * 3,
-        (msg) => msg.params.identityHash === proposeRes.appIdentityHash,
+        (msg) => msg.params.proposal.identityHash === proposeRes.appIdentityHash,
       ),
       this.emitter.waitFor(
         EventNames.REJECT_INSTALL_EVENT,
@@ -268,13 +290,11 @@ export class CFCoreService {
     return proposeRes as MethodResults.ProposeInstall;
   }
 
-  async installApp(
-    appIdentityHash: string,
-    multisigAddress: string,
-  ): Promise<MethodResults.Install> {
+  async installApp(appIdentityHash: string, channel: Channel): Promise<MethodResults.Install> {
+    assertNoChallenges(channel);
     const parameters: MethodParams.Install = {
       appIdentityHash,
-      multisigAddress,
+      multisigAddress: channel.multisigAddress,
     };
     this.logCfCoreMethodStart(MethodNames.chan_install, parameters);
     const installRes = await this.cfCore.rpcRouter.dispatch({
@@ -283,18 +303,21 @@ export class CFCoreService {
       parameters,
     });
     this.logCfCoreMethodResult(MethodNames.chan_install, installRes.result.result);
-    const installSubject = `${this.cfCore.publicIdentifier}.channel.${multisigAddress}.app-instance.${appIdentityHash}.install`;
+    const installSubject = `${this.cfCore.publicIdentifier}.channel.${channel.multisigAddress}.app-instance.${appIdentityHash}.install`;
     await this.messagingService.publish(installSubject, installRes.result.result.appInstance);
     return installRes.result.result as MethodResults.Install;
   }
 
   async rejectInstallApp(
     appIdentityHash: string,
-    multisigAddress: string,
+    channel: Channel,
+    reason: string,
   ): Promise<MethodResults.RejectInstall> {
+    assertNoChallenges(channel);
     const parameters: MethodParams.RejectInstall = {
       appIdentityHash,
-      multisigAddress,
+      multisigAddress: channel.multisigAddress,
+      reason,
     };
     this.logCfCoreMethodStart(MethodNames.chan_rejectInstall, parameters);
     const rejectRes = await this.cfCore.rpcRouter.dispatch({
@@ -303,27 +326,21 @@ export class CFCoreService {
       parameters,
     });
     this.logCfCoreMethodResult(MethodNames.chan_rejectInstall, rejectRes.result.result);
-    // update app status
-    const rejectedApp = await this.appInstanceRepository.findByIdentityHash(appIdentityHash);
-    if (!rejectedApp) {
-      throw new Error(`No app found after being rejected for app ${appIdentityHash}`);
-    }
-    rejectedApp.type = AppType.REJECTED;
-    await this.appInstanceRepository.save(rejectedApp);
     return rejectRes.result.result as MethodResults.RejectInstall;
   }
 
   async takeAction(
     appIdentityHash: string,
-    multisigAddress: string,
+    channel: Channel,
     action: AppAction,
-    stateTimeout?: utils.BigNumber,
+    stateTimeout?: BigNumber,
   ): Promise<MethodResults.TakeAction> {
+    assertNoChallenges(channel);
     const parameters = {
       action,
       appIdentityHash,
       stateTimeout,
-      multisigAddress,
+      multisigAddress: channel.multisigAddress,
     } as MethodParams.TakeAction;
     this.logCfCoreMethodStart(MethodNames.chan_takeAction, parameters);
 
@@ -339,13 +356,16 @@ export class CFCoreService {
 
   async uninstallApp(
     appIdentityHash: string,
-    multisigAddress: string,
+    channel: Channel,
     action?: AppAction,
+    protocolMeta?: any,
   ): Promise<MethodResults.Uninstall> {
+    assertNoChallenges(channel);
     const parameters = {
       appIdentityHash,
-      multisigAddress,
+      multisigAddress: channel.multisigAddress,
       action,
+      protocolMeta,
     } as MethodParams.Uninstall;
     this.logCfCoreMethodStart(MethodNames.chan_uninstall, parameters);
     const uninstallResponse = await this.cfCore.rpcRouter.dispatch({
@@ -355,6 +375,12 @@ export class CFCoreService {
     });
 
     this.logCfCoreMethodResult(MethodNames.chan_uninstall, uninstallResponse.result.result);
+    // TODO: this is only here for channelProvider, fix this eventually
+    const uninstallSubject = `${this.cfCore.publicIdentifier}.channel.${channel.multisigAddress}.app-instance.${appIdentityHash}.uninstall`;
+    await this.messagingService.publish(uninstallSubject, {
+      ...uninstallResponse.result.result,
+      protocolMeta,
+    });
     return uninstallResponse.result.result as MethodResults.Uninstall;
   }
 
@@ -374,7 +400,7 @@ export class CFCoreService {
     return appInstanceResponse.result.result.appInstances as AppInstanceJson[];
   }
 
-  async getProposedAppInstances(multisigAddress?: string): Promise<AppInstanceProposal[]> {
+  async getProposedAppInstances(multisigAddress?: string): Promise<AppInstanceJson[]> {
     const parameters = {
       multisigAddress,
     } as MethodParams.GetProposedAppInstances;
@@ -389,14 +415,14 @@ export class CFCoreService {
       MethodNames.chan_getProposedAppInstances,
       appInstanceResponse.result.result,
     );
-    return appInstanceResponse.result.result.appInstances as AppInstanceProposal[];
+    return appInstanceResponse.result.result.appInstances as AppInstanceJson[];
   }
 
   async getAppInstance(appIdentityHash: string): Promise<AppInstanceJson> {
     const parameters = {
       appIdentityHash,
     } as MethodParams.GetAppInstanceDetails;
-    let appInstance: AppInstanceJson;
+    let appInstance: AppInstanceJson | undefined;
     try {
       this.logCfCoreMethodStart(MethodNames.chan_getAppInstance, parameters);
       const appInstanceResponse = await this.cfCore.rpcRouter.dispatch({
@@ -420,17 +446,25 @@ export class CFCoreService {
     return appInstance as AppInstanceJson;
   }
 
+  async getAppInstancesByAppDefinition(
+    multisigAddress: Address,
+    appDefinition: Address,
+  ): Promise<AppInstanceJson[]> {
+    const apps = await this.getAppInstances(multisigAddress);
+    return apps.filter((app) => app.appDefinition === appDefinition);
+  }
+
   async getAppInstancesByAppName(
-    multisigAddress: string,
+    multisigAddress: Address,
     appName: SupportedApplicationNames,
   ): Promise<AppInstanceJson[]> {
-    const network = await this.configService.getEthNetwork();
-    const appRegistry = await this.appRegistryRepository.findByNameAndNetwork(
-      appName,
-      network.chainId,
-    );
+    const { data: channel } = await this.getStateChannel(multisigAddress);
     const apps = await this.getAppInstances(multisigAddress);
-    return apps.filter((app) => app.appInterface.addr === appRegistry.appDefinitionAddress);
+    return apps.filter(
+      (app) =>
+        app.appDefinition ===
+        this.getAppInfoByNameAndChain(appName, channel.chainId)!.appDefinitionAddress,
+    );
   }
 
   /**
@@ -452,5 +486,62 @@ export class CFCoreService {
       this.emitter.post(event, data.data);
       return callback(data);
     });
+  }
+
+  public getAppInfoByAppDefinitionAddress(appDefinition: string): DefaultApp {
+    const app = this.appRegistryMap.get(appDefinition);
+    if (!app) {
+      throw new Error(`App info does not exist for appDefinition ${appDefinition}`);
+    }
+    return app;
+  }
+
+  public getAppInfoByNameAndChain(name: SupportedApplicationNames, chainId: number): DefaultApp {
+    const app = this.appRegistryMap.get(`${name}:${chainId}`);
+    if (!app) {
+      throw new Error(`App info does not exist for name ${name} on chain ${chainId}`);
+    }
+    return app;
+  }
+
+  public getAppRegistry(chainId: number): AppRegistry {
+    return Object.values(SupportedApplicationNames).map(
+      (name) => this.getAppInfoByNameAndChain(name, chainId)!,
+    );
+  }
+
+  async onModuleInit() {
+    this.configService.getSupportedChains().forEach((chainId) => {
+      const contractAddresses = this.configService.getContractAddresses(chainId);
+      RegistryOfApps.forEach((app) => {
+        const appDefinitionAddress = contractAddresses[app.name];
+        this.log.info(`Creating ${app.name} app on chain ${chainId}: ${appDefinitionAddress}`);
+        // set both name and app definition as keys for better lookup
+        this.appRegistryMap.set(appDefinitionAddress, {
+          actionEncoding: app.actionEncoding,
+          appDefinitionAddress: appDefinitionAddress,
+          name: app.name,
+          chainId: chainId,
+          outcomeType: app.outcomeType,
+          stateEncoding: app.stateEncoding,
+          allowNodeInstall: app.allowNodeInstall,
+        } as DefaultApp);
+        this.appRegistryMap.set(`${app.name}:${chainId}`, {
+          actionEncoding: app.actionEncoding,
+          appDefinitionAddress: appDefinitionAddress,
+          name: app.name,
+          chainId: chainId,
+          outcomeType: app.outcomeType,
+          stateEncoding: app.stateEncoding,
+          allowNodeInstall: app.allowNodeInstall,
+        } as DefaultApp);
+      });
+    });
+  }
+
+  async onApplicationShutdown(signal: string) {
+    this.log.warn(`Disconnecting messaging service before app shutdown...`);
+    await this.messagingService.disconnect();
+    this.emitter.detach();
   }
 }
