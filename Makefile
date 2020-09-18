@@ -11,6 +11,7 @@ project=$(shell cat $(dir)/package.json | grep '"name":' | head -n 1 | cut -d '"
 registry=$(shell cat $(dir)/package.json | grep '"registry":' | head -n 1 | cut -d '"' -f 4)
 
 cwd=$(shell pwd)
+wincwd="C:\dev\workspace\indra_6.5.1"
 commit=$(shell git rev-parse HEAD | head -c 8)
 release=$(shell cat package.json | grep '"version"' | head -n 1 | cut -d '"' -f 4)
 
@@ -21,13 +22,20 @@ backwards_compatible_version=$(shell cat package.json | grep '"backwardsCompatib
 id=$(shell if [[ "`uname`" == "Darwin" ]]; then echo 0:0; else echo "`id -u`:`id -g`"; fi)
 image_cache=$(shell if [[ -n "${GITHUB_WORKFLOW}" ]]; then echo "--cache-from=$(project)_database:$(commit),$(project)_database,$(project)_ethprovider:$(commit),$(project)_ethprovider,$(project)_node:$(commit),$(project)_node,$(project)_proxy:$(commit),$(project)_proxy,$(project)_builder"; else echo ""; fi) # Pool of images to pull cached layers from during docker build steps
 interactive=$(shell if [[ -t 0 && -t 2 ]]; then echo "--interactive"; else echo ""; fi)
+is_win=$(shell if [[ "`uname -a`" =~ .*Microsoft.* ]]; then echo true; else echo false; fi)
+ifeq ($(is_win), true)
+  volcwd=$(wincwd)
+else
+  volcwd=$(cwd)
+endif
+$(shell echo $(volcwd))
 
 ########################################
 # Setup more vars
 
 find_options=-type f -not -path "*/node_modules/*" -not -name "address-book.json" -not -name "*.swp" -not -path "*/.*" -not -path "*/cache/*" -not -path "*/build/*" -not -path "*/dist/*" -not -name "*.log"
 
-docker_run=docker run --name=$(project)_builder $(interactive) --tty --rm --volume=$(cwd):/root $(project)_builder $(id)
+docker_run=docker run --name=$(project)_builder $(interactive) --tty --rm --volume=$(volcwd):/root $(project)_builder $(id)
 
 startTime=.flags/.startTime
 totalTime=.flags/.totalTime
@@ -68,7 +76,7 @@ start-bot: bot
 	bash ops/test/bot.sh 2 1000
 
 start-bot-farm: bot
-	bash ops/test/bot.sh 5 1000
+	bash ops/test/bot.sh 10 1000
 
 stop:
 	bash ops/stop.sh
@@ -105,14 +113,15 @@ quick-reset:
 	bash ops/db.sh 'truncate table onchain_transaction cascade;'
 	bash ops/db.sh 'truncate table rebalance_profile cascade;'
 	bash ops/db.sh 'truncate table app_instance cascade;'
+	bash ops/redis.sh 'flushall'
 	touch modules/node/src/main.ts
 
 reset: stop
 	docker container prune -f
-	docker volume rm `docker volume ls -q -f name=$(project)_database_test_*` 2> /dev/null || true
-	docker volume rm $(project)_database_dev 2> /dev/null || true
+	docker network rm $(project) $(project)_cf_tester $(project)_node_tester $(project)_test_store 2> /dev/null || true
 	docker secret rm $(project)_database_dev 2> /dev/null || true
-	docker volume rm $(project)_chain_dev 2> /dev/null || true
+	docker volume rm $(project)_chain_dev $(project)_database_dev  2> /dev/null || true
+	docker volume rm `docker volume ls -q -f name=$(project)_database_test_*` 2> /dev/null || true
 	rm -rf .flags/deployed-contracts
 
 push-commit:
@@ -143,6 +152,12 @@ build-report:
 lint:
 	bash ops/lint.sh
 
+publish-contracts:
+	bash ops/npm-publish.sh contracts
+
+publish-packages:
+	bash ops/npm-publish.sh
+
 dls:
 	@docker service ls
 	@echo "====="
@@ -158,10 +173,10 @@ test-backwards-compatibility: pull-backwards-compatible
 	bash ops/test/integration.sh $(backwards_compatible_version)
 
 test-bot: bot
-	bash ops/test/bot.sh 1 3
+	bash ops/test/bot.sh 2 1000 10
 
 test-bot-farm: bot
-	bash ops/test/bot.sh 3 3
+	bash ops/test/bot.sh 10 1000 50
 
 test-cf: cf-core
 	bash ops/test/cf.sh
@@ -218,7 +233,7 @@ builder: $(shell find ops/builder)
 
 node-modules: builder package.json $(shell ls modules/*/package.json)
 	$(log_start)
-	$(docker_run) "lerna bootstrap --hoist --no-progress"
+	$(docker_run) "lerna bootstrap --hoist"
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 
 py-requirements: builder docs/requirements.txt
@@ -250,11 +265,6 @@ types: node-modules $(shell find modules/types $(find_options))
 utils: types $(shell find modules/utils $(find_options))
 	$(log_start)
 	$(docker_run) "cd modules/utils && npm run build"
-	$(log_finish) && mv -f $(totalTime) .flags/$@
-
-bot-registry: types utils $(shell find modules/bot-registry $(find_options))
-	$(log_start)
-	$(docker_run) "cd modules/bot-registry && npm run build"
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 
 channel-provider: types $(shell find modules/channel-provider $(find_options))
@@ -292,7 +302,7 @@ client: types utils channel-provider messaging store contracts cf-core apps $(sh
 	$(docker_run) "cd modules/client && npm run build"
 	$(log_finish) && mv -f $(totalTime) .flags/$@
 
-bot: types utils bot-registry channel-provider messaging store contracts cf-core apps client $(shell find modules/bot $(find_options))
+bot: types utils channel-provider messaging store contracts cf-core apps client $(shell find modules/bot $(find_options))
 	$(log_start)
 	$(docker_run) "cd modules/bot && npm run build"
 	$(log_finish) && mv -f $(totalTime) .flags/$@

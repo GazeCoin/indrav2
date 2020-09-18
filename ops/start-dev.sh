@@ -4,8 +4,15 @@ set -e
 dir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )"
 project="`cat $dir/../package.json | grep '"name":' | head -n 1 | cut -d '"' -f 4`"
 
+echo 'start-dev.sh '$project
+
 # Turn on swarm mode if it's not already on
 docker swarm init 2> /dev/null || true
+
+# Deploy with an attachable network so tests & the daicard can connect to individual components
+# Delete/recreate the network first to delay docker network slowdowns that have been happening
+docker network rm $project 2> /dev/null || true
+docker network create --attachable --driver overlay $project
 
 ####################
 # Load env vars
@@ -56,7 +63,7 @@ nats_port=4222
 node_port=8080
 dash_port=9999
 webserver_port=3000
-ganacheId="4447"
+ganacheId="1337"
 
 if [[ "$INDRA_ETH_PROVIDER" == "$ganacheProvider" ]]
 then chainId="$ganacheId"
@@ -106,8 +113,20 @@ node_image="$builder_image"
 proxy_image="${project}_proxy"
 redis_image="redis:5-alpine"
 
+if [[ "`pwd`" =~ /mnt/c/(.*) ]]
+then home_dir="//c/${BASH_REMATCH[1]}"
+else home_dir="`pwd`"
+fi
+
 ####################
 # Deploy according to above configuration
+
+# Detect Windows
+if [[ "`pwd`" =~ /mnt/c/(.*) ]]
+then home_dir="//c/${BASH_REMATCH[1]}"
+else home_dir="`pwd`"
+fi
+echo "home_dir=$home_dir"
 
 if [[ "$INDRA_UI" == "headless" ]]
 then
@@ -118,7 +137,7 @@ else
   elif [[ "$INDRA_UI" == "daicard" ]]
   then webserver_working_dir=/root/modules/daicard
   else
-    echo "INDRA_UI: Expected headless, dashboard, or daicard"
+    echo "INDRA_UI: Expected headless, dashboard, daicard, or dcwallet"
     exit 1
   fi
   number_of_services=$(( $number_of_services + 2 ))
@@ -146,7 +165,7 @@ else
     networks:
       - '$project'
     volumes:
-      - '`pwd`:/root'
+      - '${home_dir}:/root'
     working_dir: '$webserver_working_dir'
   "
 fi
@@ -176,6 +195,19 @@ function new_secret {
 }
 new_secret "${project}_database_dev" "$project"
 
+eth_mnemonic_name="${project}_mnemonic_$INDRA_ETH_NETWORK"
+
+if [[ "$INDRA_ETH_NETWORK" != "ganache" ]]
+then
+  eth_secret=" $eth_mnemonic_name
+    external: true"
+  eth_secret_name="- $eth_mnemonic_name"
+else
+  eth_secret=""
+  eth_secret_name=""
+fi
+echo "ETH secret: $eth_secret"
+
 # Deploy with an attachable network so tests & the daicard can connect to individual components
 if [[ -z "`docker network ls -f name=$project | grep -w $project`" ]]
 then
@@ -183,6 +215,7 @@ then
   echo "Created ATTACHABLE network with id $id"
 fi
 
+export COMPOSE_CONVERT_WINDOWS_PATHS=1
 mkdir -p /tmp/$project
 cat - > /tmp/$project/docker-compose.yml <<EOF
 version: '3.4'
@@ -194,6 +227,7 @@ networks:
 secrets:
   ${project}_database_dev:
     external: true
+  $eth_secret
 
 volumes:
   certs:
@@ -231,10 +265,11 @@ services:
       - '$project'
     ports:
       - '$node_port:$node_port'
+      - '9229:9229'
     secrets:
       - '${project}_database_dev'
     volumes:
-      - '`pwd`:/root'
+      - ${home_dir}:/root
 
   ethprovider:
     image: '$ethprovider_image'
@@ -247,7 +282,7 @@ services:
     ports:
       - '8545:8545'
     volumes:
-      - '`pwd`:/root'
+      - '${home_dir}:/root'
       - 'chain_dev:/data'
 
   database:

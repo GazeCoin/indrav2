@@ -16,6 +16,11 @@ mode="${MODE:-local}"
 # Calculate stuff based on env
 
 cwd="`pwd`"
+# Detect Windows
+if [[ "`pwd`" =~ /mnt/c/(.*) ]]
+then home_dir=C:/${BASH_REMATCH[1]}
+else home_dir="`pwd`"
+fi
 
 registry="docker.io/connextproject"
 
@@ -24,9 +29,10 @@ release="`cat package.json | grep '"version":' | awk -F '"' '{print $4}'`"
 name=${project}_contract_deployer
 
 if [[ -f "$cwd/address-book.json" ]]
-then address_book="$cwd/address-book.json"
-else address_book="$cwd/modules/contracts/address-book.json"
+then address_book="$home_dir/address-book.json"
+else address_book="$home_dir/modules/contracts/address-book.json"
 fi
+echo 'home='$home_dir
 
 ########################################
 # Load private key into secret store
@@ -61,7 +67,7 @@ then
     "$SECRET_ENV" \
     --entrypoint="bash" \
     --env="ETH_PROVIDER=$ETH_PROVIDER" \
-    --mount="type=bind,source=$cwd,target=/root" \
+    --mount="type=bind,source=$home_dir,target=/root" \
     --mount="type=volume,source=${project}_chain_dev,target=/data" \
     --name="$name" \
     --rm \
