@@ -6,6 +6,12 @@ project="`cat $root/package.json | grep '"name":' | head -n 1 | cut -d '"' -f 4`
 registry="`cat $root/package.json | grep '"registry":' | head -n 1 | cut -d '"' -f 4`"
 tmp="$root/.tmp"; mkdir -p $tmp
 
+if [[ $root =~ /mnt/c/(.*) ]]
+then home_dir=//c/${BASH_REMATCH[1]}
+else home_dir=$root
+fi
+echo "root is $root. home_dir is $home_dir"
+
 # turn on swarm mode if it's not already on
 docker swarm init 2> /dev/null || true
 
@@ -129,7 +135,7 @@ else
   node_image="image: '${project}_builder'
     entrypoint: 'bash modules/node/ops/entry.sh'
     volumes:
-      - '$root:/root'
+      - '$home_dir:/root'
     ports:
       - '$node_port:$node_port'
       - '9229:9229'"
@@ -145,6 +151,8 @@ pull_if_unavailable "$database_image"
 
 snapshots_dir="$root/.db-snapshots"
 mkdir -p $snapshots_dir
+snapshots_home="$home_dir/.db-snapshots"
+echo "snapshots home $snapshots_home"
 
 if [[ "$INDRA_ENV" == "prod" ]]
 then
@@ -267,7 +275,7 @@ prometheus_services="prometheus:
     command:
       - --config.file=/etc/prometheus/prometheus.yml
     volumes:
-      - $root/ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - $home_dir/ops/prometheus.yml:/etc/prometheus/prometheus.yml:ro
   cadvisor:
     $common
     image: $cadvisor_image
@@ -395,7 +403,7 @@ services:
       - '$db_secret'
     volumes:
       - '$db_volume:/var/lib/postgresql/data'
-      - '$snapshots_dir:/root/snapshots'
+      - '$snapshots_home:/root/snapshots'
 
   nats:
     $common
