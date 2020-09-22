@@ -30,7 +30,9 @@ ifeq ($(is_win), true)
 else
   volcwd=$(cwd)
 endif
-$(shell echo $(volcwd))
+
+#	@echo 'echo volcwd'
+#	$(shell echo $(volcwd))
 
 ########################################
 # Setup more vars
