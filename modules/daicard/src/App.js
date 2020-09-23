@@ -54,6 +54,7 @@ const LOG_LEVEL = 5;
 const WITHDRAW_ESTIMATED_GAS = toBN("300000");
 const DEPOSIT_ESTIMATED_GAS = toBN("25000");
 const MAX_CHANNEL_VALUE = Currency.DAI("30");
+const MAX_GAZE_CHANNEL_VALUE = toBN("1000");
 
 // change to use token with custom decimals
 export const TOKEN_DECIMALS = 18;
@@ -99,11 +100,13 @@ class App extends React.Component {
           ether: Currency.ETH("0", swapRate),
           token: Currency.DAI("0", swapRate),
           total: Currency.ETH("0", swapRate),
+          gaze: toBN("0"),
         },
         onChain: {
           ether: Currency.ETH("0", swapRate),
           token: Currency.DAI("0", swapRate),
           total: Currency.ETH("0", swapRate),
+          gaze: toBN("0"),
         },
       },
       ethProvider: new providers.JsonRpcProvider(urls.ethProviderUrl),
@@ -111,12 +114,14 @@ class App extends React.Component {
       machine,
       maxDeposit: null,
       minDeposit: null,
+      maxGazeDeposit: null,
       network: {},
       useWalletConnext: false,
       saiBalance: Currency.DAI("0", swapRate),
       state: machine.initialState,
       swapRate,
       token: null,
+      gazeToken: null,
     };
     this.refreshBalances.bind(this);
     this.autoDeposit.bind(this);
@@ -254,6 +259,12 @@ class App extends React.Component {
       ERC20.abi,
       ethProvider,
     );
+    const gazeToken = new Contract(
+      channel.config.contractAddresses[chainId].GazeToken,
+      ERC20.abi,
+      ethProvider,
+    );
+
     const swapRate = await channel.getLatestSwapRate(AddressZero, token.address);
 
     console.log(`Client created successfully!`);
@@ -261,6 +272,7 @@ class App extends React.Component {
     console.log(` - Account multisig address: ${channel.multisigAddress}`);
     console.log(` - Free balance address: ${channel.signerAddress}`);
     console.log(` - Token address: ${token.address}`);
+    console.log(` - Gaze Token address: ${gazeToken.address}`);
     console.log(` - Swap rate: ${swapRate}`);
 
     channel.subscribeToSwapRates(AddressZero, token.address, (res) => {
@@ -289,6 +301,7 @@ class App extends React.Component {
       useWalletConnext,
       swapRate,
       token,
+      gazeToken,
     });
 
     const saiBalance = Currency.DEI(await this.getSaiBalance(ethProvider), swapRate);
@@ -365,14 +378,16 @@ class App extends React.Component {
       swapRate,
     ).toETH();
     const maxDeposit = MAX_CHANNEL_VALUE.toETH(swapRate); // Or get based on payment profile?
-    return { maxDeposit, minDeposit };
+    const maxGazeDeposit = MAX_GAZE_CHANNEL_VALUE;
+    return { maxDeposit, minDeposit, maxGazeDeposit };
   };
 
   getChannelBalances = async () => {
-    const { balance, channel, swapRate, token } = this.state;
+    const { balance, channel, swapRate, token, gazeToken } = this.state;
     const getTotal = (ether, token) => Currency.WEI(ether.wad.add(token.toETH().wad), swapRate);
     const freeEtherBalance = await channel.getFreeBalance();
     const freeTokenBalance = await channel.getFreeBalance(token.address);
+    const freeGazeBalance = await channel.getFreeBalance(gazeToken.address);
     balance.onChain.ether = Currency.WEI(
       await ethProvider.getBalance(channel.signerAddress),
       swapRate,
@@ -381,10 +396,12 @@ class App extends React.Component {
       await token.balanceOf(channel.signerAddress),
       swapRate,
     ).toDAI();
+    balance.onChain.gaze = await gazeToken.balanceOf(channel.signerAddress);
     balance.onChain.total = getTotal(balance.onChain.ether, balance.onChain.token).toETH();
     balance.channel.ether = Currency.WEI(freeEtherBalance[channel.signerAddress], swapRate).toETH();
     balance.channel.token = Currency.DEI(freeTokenBalance[channel.signerAddress], swapRate).toDAI();
     balance.channel.total = getTotal(balance.channel.ether, balance.channel.token).toETH();
+    balance.channel.gaze = freeGazeBalance[channel.signerAddress];
     const logIfNotZero = (wad, prefix) => {
       if (wad.isZero()) {
         return;
@@ -395,6 +412,7 @@ class App extends React.Component {
     logIfNotZero(balance.onChain.ether.wad, `chain ether balance`);
     logIfNotZero(balance.channel.token.wad, `channel token balance`);
     logIfNotZero(balance.channel.ether.wad, `channel ether balance`);
+    logIfNotZero(balance.channel.gaze, `channel gaze balance`);
     return balance;
   };
 
@@ -405,9 +423,11 @@ class App extends React.Component {
       machine,
       maxDeposit,
       minDeposit,
+      maxGazeDeposit,
       state,
       swapRate,
       token,
+      gazeToken,
     } = this.state;
     if (!state.matches("ready")) {
       console.warn(`Channel not available yet.`);
@@ -482,6 +502,51 @@ class App extends React.Component {
 
       machine.send(["SUCCESS_DEPOSIT"]);
     }
+
+    // GZE
+    if (balance.onChain.gaze.eq(Zero)) {
+      console.debug(`No on-chain gze to deposit`);
+      return;
+    }
+
+    let nowMaxGazeDeposit = maxGazeDeposit.sub(this.state.balance.channel.gazeToken);
+    if (nowMaxGazeDeposit.lte(Zero)) {
+      console.debug(
+        `Channel balance (${balance.channel.gaze.format()}) is at or above ` +
+          `cap of ${maxGazeDeposit.format()}`,
+      );
+      return;
+    }
+
+    if (balance.onChain.gaze.gt(Zero)) {
+      machine.send(["START_DEPOSIT"]);
+
+      const amount = minBN([
+        nowMaxGazeDeposit,
+        balance.onChain.gaze,
+      ]);
+      const depositParams = {
+        amount: amount.toString(),
+        assetId: gazeToken.address,
+      };
+      console.log(
+        `Depositing ${depositParams.amount} GZE tokens into channel: ${channel.multisigAddress}`,
+      );
+      const result = await channel.deposit(depositParams);
+      await this.refreshBalances();
+      console.log(`Successfully deposited GZE tokens! Result: ${JSON.stringify(result, null, 2)}`);
+
+      nowMaxGazeDeposit = maxGazeDeposit.sub(this.state.balance.channel.gaze);
+      if (nowMaxGazeDeposit.lte(Zero)) {
+        console.debug(
+          `Channel balance (${balance.channel.gaze}) is at or above ` +
+            `cap of ${maxGazeDeposit}`,
+        );
+      }
+
+      machine.send(["SUCCESS_DEPOSIT"]);
+    }
+
   };
 
   autoSwap = async () => {

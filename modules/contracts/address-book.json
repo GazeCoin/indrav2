@@ -7,6 +7,9 @@
     "SAIToken": {
       "address": "0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359"
     },
+    "GazeToken": {
+      "address": "0x89d24A6b4CcB1B6fAA2625fE562bDD9a23260359"
+    },
     "ChallengeRegistry": {
       "address": "0x2bceDD76cBEcCC6f1C134A7E459aAe5efD2Cfd6C",
       "creationCodeHash": "0x42eba77f58ecb5c1352e9a62df1eed73aa1a89890ff73be1939f884f62d88c46",
@@ -1409,6 +1412,9 @@
       "creationCodeHash": "0xa97c8e987f37ee4c25b13296adac55bafc9f6e5bb3fd6e89f13ba5df24cbdb95",
       "runtimeCodeHash": "0xf995caffd143622dde4976800a7b57d98dade82728d7ff68ad96eb5004ab95b0",
       "txHash": "0x14da97da66670ba39c48bbba02d6fed7cd3311a5d54bce97e8195b4f86587f6a"
+    },
+    "GazeToken": {
+      "address": "0xb9A219631Aed55eBC3D998f17C3840B7eC39C0cc"
     }
   },
   "80001": {

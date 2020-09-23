@@ -51,6 +51,7 @@ export class ConfigService implements OnModuleInit {
       this.providers.set(chainId, provider);
       this.signers.set(chainId, new ChannelSigner(this.getPrivateKey(), provider));
       this.log.info(`Registered new provider at url ${urls[idx]} & signer for chain ${chainId}`);
+      this.log.info(`Supported tokens: ${this.getSupportedTokens()[chainId]}`);
     });
   }
 
