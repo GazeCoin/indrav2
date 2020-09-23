@@ -12,6 +12,7 @@ export class Currency {
   public static ETH = (amount: any, daiRate?: any) => new Currency("ETH", amount, daiRate);
   public static FIN = (amount: any, daiRate?: any) => new Currency("FIN", amount, daiRate);
   public static WEI = (amount: any, daiRate?: any) => new Currency("WEI", amount, daiRate);
+  public static GZE = (amount: any, daiRate?: any) => new Currency("GZE", amount, daiRate);
 
   public typeToSymbol = {
     DAI: "$",
@@ -19,6 +20,7 @@ export class Currency {
     ETH: EtherSymbol,
     FIN: "FIN ",
     WEI: "WEI ",
+    GZE: "GZE",
   };
 
   public defaultOptions = {
@@ -27,6 +29,7 @@ export class Currency {
     ETH: { commas: false, decimals: 3, symbol: true, round: true },
     FIN: { commas: false, decimals: 3, symbol: false, round: true },
     WEI: { commas: false, decimals: 0, symbol: false, round: true },
+    GZE: { commas: false, decimals: 0, symbol: false, round: true },
   };
 
   ////////////////////////////////////////
@@ -93,7 +96,7 @@ export class Currency {
   }
 
   public isTokenType(type?: any) {
-    return ["DAI", "DEI"].includes(type || this.type);
+    return ["DAI", "DEI", "GZE"].includes(type || this.type);
   }
 
   public toBN() {
