@@ -50,14 +50,16 @@ console.log("Using urls:", urls);
 // LogLevel for testing ChannelProvider
 const LOG_LEVEL = 5;
 
+// change to use token with custom decimals
+export const TOKEN_DECIMALS = 18;
+
 // Constants for channel max/min - this is also enforced on the hub
 const WITHDRAW_ESTIMATED_GAS = toBN("300000");
 const DEPOSIT_ESTIMATED_GAS = toBN("25000");
 const MAX_CHANNEL_VALUE = Currency.DAI("30");
-const MAX_GAZE_CHANNEL_VALUE = toBN("1000");
+const WEI_MULTIPLIER = toBN("10").pow(TOKEN_DECIMALS);
+const MAX_GAZE_CHANNEL_VALUE = toBN("1000").mul(WEI_MULTIPLIER);
 
-// change to use token with custom decimals
-export const TOKEN_DECIMALS = 18;
 
 const style = withStyles((theme) => ({
   paper: {
@@ -359,8 +361,8 @@ class App extends React.Component {
 
   refreshBalances = async () => {
     const { channel, swapRate } = this.state;
-    const { maxDeposit, minDeposit } = await this.getDepositLimits();
-    this.setState({ maxDeposit, minDeposit });
+    const { maxDeposit, minDeposit, maxGazeDeposit } = await this.getDepositLimits();
+    this.setState({ maxDeposit, minDeposit, maxGazeDeposit });
     if (!channel || !swapRate) {
       return;
     }
@@ -397,6 +399,7 @@ class App extends React.Component {
       swapRate,
     ).toDAI();
     balance.onChain.gaze = await gazeToken.balanceOf(channel.signerAddress);
+    console.debug(`onChain GZE balance: ${balance.onChain.gaze.toString()}`);
     balance.onChain.total = getTotal(balance.onChain.ether, balance.onChain.token).toETH();
     balance.channel.ether = Currency.WEI(freeEtherBalance[channel.signerAddress], swapRate).toETH();
     balance.channel.token = Currency.DEI(freeTokenBalance[channel.signerAddress], swapRate).toDAI();
@@ -441,9 +444,10 @@ class App extends React.Component {
       console.warn(`Another operation is pending, waiting to autoswap`);
       return;
     }
+    let doEthSwap = true;
     if (balance.onChain.ether.wad.eq(Zero)) {
       console.debug(`No on-chain eth to deposit`);
-      return;
+      doEthSwap = false;
     }
 
     let nowMaxDeposit = maxDeposit.wad.sub(this.state.balance.channel.total.wad);
@@ -452,10 +456,11 @@ class App extends React.Component {
         `Channel balance (${balance.channel.total.toDAI().format()}) is at or above ` +
           `cap of ${maxDeposit.toDAI(swapRate).format()}`,
       );
-      return;
+      doEthSwap = false;
+//      return;
     }
 
-    if (balance.onChain.token.wad.gt(Zero) || balance.onChain.ether.wad.gt(minDeposit.wad)) {
+    if (doEthSwap && (balance.onChain.token.wad.gt(Zero) || balance.onChain.ether.wad.gt(minDeposit.wad))) {
       machine.send(["START_DEPOSIT"]);
 
       if (balance.onChain.token.wad.gt(Zero)) {
@@ -509,11 +514,11 @@ class App extends React.Component {
       return;
     }
 
-    let nowMaxGazeDeposit = maxGazeDeposit.sub(this.state.balance.channel.gazeToken);
+    let nowMaxGazeDeposit = maxGazeDeposit.sub(balance.channel.gaze);
     if (nowMaxGazeDeposit.lte(Zero)) {
       console.debug(
-        `Channel balance (${balance.channel.gaze.format()}) is at or above ` +
-          `cap of ${maxGazeDeposit.format()}`,
+        `Channel balance (${balance.channel.gaze.toString()}) is at or above ` +
+          `cap of ${maxGazeDeposit.toString()}`,
       );
       return;
     }
@@ -536,7 +541,7 @@ class App extends React.Component {
       await this.refreshBalances();
       console.log(`Successfully deposited GZE tokens! Result: ${JSON.stringify(result, null, 2)}`);
 
-      nowMaxGazeDeposit = maxGazeDeposit.sub(this.state.balance.channel.gaze);
+      nowMaxGazeDeposit = maxGazeDeposit.sub(balance.channel.gaze);
       if (nowMaxGazeDeposit.lte(Zero)) {
         console.debug(
           `Channel balance (${balance.channel.gaze}) is at or above ` +
