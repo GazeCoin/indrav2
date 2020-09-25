@@ -13,7 +13,8 @@
     "build": "rm -rf ./dist/* && ./node_modules/.bin/tsc -p tsconfig.json",
     "rebuild": "npm run clean && npm run build",
     "clean": "rm -rf ./dist",
-    "lint": "../../node_modules/.bin/eslint -c '../../.eslintrc.js' --fix 'src/**/*'"
+    "lint": "../../node_modules/.bin/eslint -c '../../.eslintrc.js' --fix 'src/**/*'",
+    "bundle": "webpack-cli --config webpack.config.js"
   },
   "dependencies": {
     "@connext/apps": "7.3.16",
@@ -36,6 +37,20 @@
   "devDependencies": {
     "@babel/polyfill": "7.10.4",
     "@types/uuid": "8.0.1",
-    "typescript": "3.9.7"
+    "@types/eccrypto": "1.1.1",
+    "@types/jest": "24.0.25",
+    "babel-plugin-transform-class-properties": "^6.24.1",
+    "jest": "24.9.0",
+    "rollup-plugin-commonjs": "^10.1.0",
+    "rollup-plugin-inject": "^3.0.2",
+    "rollup-plugin-node-builtins": "^2.1.2",
+    "rollup-plugin-node-resolve": "^5.2.0",
+    "rollup-plugin-typescript": "^1.0.1",
+    "rollup-plugin-typescript2": "^0.25.2",
+    "ts-loader": "^6.2.1",
+    "typescript": "3.9.7",
+    "webpack-cli": "^3.3.10",
+    "webpack-node-externals": "^1.7.2",
+    "webpack-node-modules-list": "^0.4.1"
   }
 }
