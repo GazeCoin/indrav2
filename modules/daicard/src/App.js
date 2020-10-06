@@ -125,6 +125,7 @@ class App extends React.Component {
       machine,
       maxDeposit: null,
       minDeposit: null,
+      maxGazeDeposit: null,
       network: {},
       useWalletConnext: false,
       saiBalance: Currency.DAI("0", swapRate),
