@@ -27,6 +27,7 @@ export INDRA_MNEMONIC=$mnemonic
 # Run buidlerevm first so that it can finish while we're waiting for ganache to get set up
 bash ops/start-chain.sh $chain_id_2
 
+export INDRA_CHAIN_PORT=8547
 bash ops/start-chain.sh $chain_id_1
 
 # Pull the tmp address books out of each chain provider & merge them into one
