@@ -271,7 +271,7 @@ class App extends React.Component {
 
     const token = new Contract(channel.config.contractAddresses.Token, ERC20.abi, ethProvider);
     const gazeToken = new Contract(
-      channel.config.contractAddresses[chainId].GazeToken,
+      channel.config.contractAddresses.GazeToken,
       ERC20.abi,
       ethProvider,
     );
@@ -364,7 +364,7 @@ class App extends React.Component {
 
   refreshBalances = async () => {
     const { channel, swapRate } = this.state;
-    const { maxDeposit, minDeposit, mazGazeDeposit } = await this.getDepositLimits();
+    const { maxDeposit, minDeposit, maxGazeDeposit } = await this.getDepositLimits();
     this.setState({ maxDeposit, minDeposit, maxGazeDeposit });
     if (!channel || !swapRate) {
       return;
