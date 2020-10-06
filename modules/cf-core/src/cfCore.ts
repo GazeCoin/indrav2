@@ -27,7 +27,6 @@ import {
 import { delay, nullLogger } from "@connext/utils";
 import { providers } from "ethers";
 import EventEmitter from "eventemitter3";
-import { Memoize } from "typescript-memoize";
 
 import { IO_SEND_AND_WAIT_TIMEOUT } from "./constants";
 import { Deferred } from "./deferred";
@@ -107,12 +106,10 @@ export class CFCore {
     this.protocolRunner = this.buildProtocolRunner();
   }
 
-  @Memoize()
   get signerAddress(): Address {
     return this.signer.address;
   }
 
-  @Memoize()
   get publicIdentifier(): PublicIdentifier {
     return this.signer.publicIdentifier;
   }

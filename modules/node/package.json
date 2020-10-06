@@ -46,8 +46,7 @@
     "reflect-metadata": "0.1.13",
     "rxjs": "6.5.5",
     "ts-natsutil": "1.0.6",
-    "typeorm": "0.2.24",
-    "typescript-memoize": "1.0.0-alpha.3"
+    "typeorm": "0.2.24"
   },
   "devDependencies": {
     "@connext/client": "6.7.1",

@@ -82,4 +82,5 @@ fi
 cp /etc/ssl/cert.pem ca-certs.pem
 
 echo "Entrypoint finished, executing haproxy..."; echo
+# Temporary - disable daicard proxy
 exec haproxy -db -f haproxy.cfg

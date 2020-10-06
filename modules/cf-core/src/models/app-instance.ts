@@ -23,7 +23,6 @@ import {
   toBN,
 } from "@connext/utils";
 import { Contract, constants, utils, providers } from "ethers";
-import { Memoize } from "typescript-memoize";
 
 import { CounterfactualApp } from "../contracts";
 
@@ -170,12 +169,10 @@ export class AppInstance {
     });
   }
 
-  @Memoize()
   public get identityHash() {
     return appIdentityToHash(this.identity);
   }
 
-  @Memoize()
   public get participants() {
     return [
       getSignerAddressFromPublicIdentifier(this.initiatorIdentifier),
@@ -183,7 +180,6 @@ export class AppInstance {
     ];
   }
 
-  @Memoize()
   public get identity(): AppIdentity {
     return {
       participants: this.participants,
@@ -194,17 +190,14 @@ export class AppInstance {
     };
   }
 
-  @Memoize()
   public get hashOfLatestState() {
     return keccak256(this.encodedLatestState);
   }
 
-  @Memoize()
   public get encodedLatestState() {
     return defaultAbiCoder.encode([this.appInterface.stateEncoding], [this.latestState]);
   }
 
-  @Memoize()
   public get encodedInterpreterParams() {
     switch (this.outcomeType) {
       case OutcomeType.SINGLE_ASSET_TWO_PARTY_COIN_TRANSFER: {
