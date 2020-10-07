@@ -384,6 +384,7 @@ class App extends React.Component {
       swapRate,
     ).toETH();
     const maxDeposit = MAX_CHANNEL_VALUE.toETH(swapRate); // Or get based on payment profile?
+    const maxGazeDeposit = MAX_GAZE_CHANNEL_VALUE;
     return { maxDeposit, minDeposit, maxGazeDeposit };
   };
 
