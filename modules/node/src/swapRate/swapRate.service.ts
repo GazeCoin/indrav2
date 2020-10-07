@@ -75,7 +75,9 @@ export class SwapRateService implements OnModuleInit {
                 resolve(await this.getUniswapRate(from, to));
                 break;
               case PriceOracleTypes.HARDCODED:
-                resolve(await this.config.getHardcodedRate(from, to));
+                const rate = await this.config.getHardcodedRate(from, to);
+                console.log(`Got hardcoded rate ${rate}`)
+                resolve(rate);                
                 break;
               default:
                 throw new Error(`Price oracle not configured for swap ${from} -> ${to}`);

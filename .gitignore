@@ -23,6 +23,7 @@ modules/*/package-lock.json
 **/.rpt2_cache
 **/.test-store
 **/cache/**
+**/*.sql
 
 # Docs
 modules/client/docs
@@ -61,3 +62,4 @@ modules/bot-registry/.node-persist/
 
 # Local address book
 address-book.json
+.db-snapshots/200921-031326.sql
