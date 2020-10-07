@@ -156,6 +156,7 @@ export class ConfigService implements OnModuleInit {
     if (swap && swap.rate) {
       return swap.rate;
     } else {
+      console.log(`getting default swap rate ${from} ${to}`);
       return this.getDefaultSwapRate(from, to);
     }
   }
