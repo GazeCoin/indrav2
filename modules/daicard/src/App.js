@@ -286,11 +286,11 @@ class App extends React.Component {
     console.log(` - Gaze Token address: ${gazeToken.address}`);
     console.log(` - Swap rate: ${swapRate}`);
 
-    channel.subscribeToSwapRates(AddressZero, token.address, (res) => {
-      if (!res || !res.swapRate) return;
-      console.log(`Got swap rate upate: ${this.state.swapRate} -> ${res.swapRate}`);
-      this.setState({ swapRate: res.swapRate });
-    });
+    // channel.subscribeToSwapRates(AddressZero, token.address, (res) => {
+    //   if (!res || !res.swapRate) return;
+    //   console.log(`Got swap rate upate: ${this.state.swapRate} -> ${res.swapRate}`);
+    //   this.setState({ swapRate: res.swapRate });
+    // });
 
     channel.on(EventNames.RECEIVE_TRANSFER_STARTED_EVENT, (data) => {
       console.log(`Received ${EventNames.RECEIVE_TRANSFER_STARTED_EVENT} event: `, data);
