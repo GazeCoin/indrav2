@@ -77,9 +77,10 @@ fi
 eth_mnemonic="${ETH_MNEMONIC:-`dotEnv ETH_MNEMONIC`}"
 
 token_address="`echo $eth_contract_addresses | jq '.["'"$chainId"'"].Token.address' | tr -d '"'`"
+gaze_token_address="`echo $eth_contract_addresses | jq '.["'"$chainId"'"].GazeToken.address' | tr -d '"'`"
 allowed_swaps='[{"from":"'"$token_address"'","to":"0x0000000000000000000000000000000000000000","priceOracleType":"HARDCODED","rate":"100"},{"from":"0x0000000000000000000000000000000000000000","to":"'"$token_address"'","priceOracleType":"HARDCODED","rate":"0.01"}]'
 
-supported_tokens="$token_address,0x0000000000000000000000000000000000000000"
+supported_tokens="$token_address,$gaze_token_address,0x0000000000000000000000000000000000000000"
 
 if [[ -z "$chainId" || "$chainId" == "null" ]]
 then echo "Failed to fetch chainId from provider ${INDRA_ETH_PROVIDER}" && exit 1;
