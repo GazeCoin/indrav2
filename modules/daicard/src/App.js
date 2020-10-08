@@ -463,7 +463,7 @@ class App extends React.Component {
       //return;
     }
 
-    if (doEthSwap && balance.onChain.token.wad.gt(Zero) || balance.onChain.ether.wad.gt(minDeposit.wad)) {
+    if (doEthSwap && (balance.onChain.token.wad.gt(Zero) || balance.onChain.ether.wad.gt(minDeposit.wad))) {
       machine.send(["START_DEPOSIT"]);
 
       if (balance.onChain.token.wad.gt(Zero)) {
