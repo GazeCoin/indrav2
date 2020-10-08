@@ -245,7 +245,7 @@ services:
     networks:
       - '$project'
     ports:
-      - '8545:8545'
+      - '8547:8545'
     volumes:
       - '`pwd`:/root'
       - 'chain_dev:/data'
