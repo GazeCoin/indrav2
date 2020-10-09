@@ -49,11 +49,11 @@ export const ChannelCard = withStyles(styles)(props => {
               {"GZE "}
             </Typography>
             <Typography style={{ display: "inline-block" }} variant="h1" className={classes.row}>
-              <span>{split(balance.channel.gaze.div(WEI_MULTIPLIER)).whole}</span>
+              <span>{balance.channel.gaze.div(WEI_MULTIPLIER).toString()}</span>
             </Typography>
-            <Typography style={{ display: "inline-block" }} variant="h3" className={classes.row}>
+            {/*<Typography style={{ display: "inline-block" }} variant="h3" className={classes.row}>
               <span>{split(balance.channel.gaze.div(WEI_MULTIPLIER)).part}</span>
-            </Typography>
+            </Typography>*/}
           </span>
           {/* <span style={{fontSize: 64}}>&nbsp;&nbsp;&nbsp;</span> */}
           {/* <span id="balance-channel-ether">
