@@ -62,7 +62,7 @@ export const TOKEN_DECIMALS = 18;
 const WITHDRAW_ESTIMATED_GAS = toBN("300000");
 const DEPOSIT_ESTIMATED_GAS = toBN("25000");
 const MAX_CHANNEL_VALUE = Currency.DAI("0");
-const WEI_MULTIPLIER = toBN("10").pow(TOKEN_DECIMALS);
+export const WEI_MULTIPLIER = toBN("10").pow(TOKEN_DECIMALS);
 const MAX_GAZE_CHANNEL_VALUE = toBN("1000").mul(WEI_MULTIPLIER);
 
 // it is important to add a default payment

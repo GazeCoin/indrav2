@@ -1,4 +1,5 @@
 import { Grid, Typography, withStyles } from "@material-ui/core";
+import { WEI_MULTIPLIER } from "../App"
 import React from "react";
 
 // import { ethers as eth } from "ethers";
@@ -45,13 +46,13 @@ export const ChannelCard = withStyles(styles)(props => {
           {/* <Typography style={{ color: 'white' }}> Channel </Typography> */}
           <span id="balance-channel-token">
             <Typography style={{ display: "inline-block" }} variant="h3" className={classes.row}>
-              {"$ "}
+              {"GZE "}
             </Typography>
             <Typography style={{ display: "inline-block" }} variant="h1" className={classes.row}>
-              <span>{split(balance.channel.token.toDAI(swapRate)).whole}</span>
+              <span>{split(balance.channel.gaze.div(WEI_MULTIPLIER)).whole}</span>
             </Typography>
             <Typography style={{ display: "inline-block" }} variant="h3" className={classes.row}>
-              <span>{split(balance.channel.token.toDAI(swapRate)).part}</span>
+              <span>{split(balance.channel.gaze.div(WEI_MULTIPLIER)).part}</span>
             </Typography>
           </span>
           {/* <span style={{fontSize: 64}}>&nbsp;&nbsp;&nbsp;</span> */}
