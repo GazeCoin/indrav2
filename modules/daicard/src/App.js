@@ -276,7 +276,7 @@ class App extends React.Component {
       ERC20.abi,
       ethProvider,
     );
-    const swapRate = await channel.getLatestSwapRate(AddressZero, token.address);
+    const swapRate = "1"; //await channel.getLatestSwapRate(AddressZero, token.address);
 
     console.log(`Client created successfully!`);
     console.log(` - Public Identifier: ${channel.publicIdentifier}`);
