@@ -76,7 +76,7 @@ export class SwapRateService implements OnModuleInit {
                 break;
               case PriceOracleTypes.HARDCODED:
                 const rate = await this.config.getHardcodedRate(from, to);
-                console.log(`Got hardcoded rate ${rate}`)
+                //console.log(`Got hardcoded rate ${rate}`)
                 resolve(rate);                
                 break;
               default:

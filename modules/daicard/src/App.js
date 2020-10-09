@@ -419,6 +419,7 @@ class App extends React.Component {
     logIfNotZero(balance.onChain.ether.wad, `chain ether balance`);
     logIfNotZero(balance.channel.token.wad, `channel token balance`);
     logIfNotZero(balance.channel.ether.wad, `channel ether balance`);
+    console.debug(`channel GZE balance: ${balance.channel.gaze.div(WEI_MULTIPLIER).toString()}`);
     return balance;
   };
 
