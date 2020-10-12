@@ -27,7 +27,7 @@ import { WEI_MULTIPLIER } from "../App";
 
 const { Zero } = constants;
 
-const LINK_LIMIT = toBN("500"); // $10 capped linked payments
+const LINK_LIMIT = Currency.DAI("500"); // $10 capped linked payments
 
 const style = withStyles((theme) => ({
   modalContent: {
@@ -133,7 +133,7 @@ export const SendCard = style(
         setRecipientError(null);
       }
       if (toBN(amount.value.toDEI()).gt(LINK_LIMIT.wad)) {
-        setAmount({ ...amount, error: `Linked payments are capped at ${LINK_LIMIT.toString()}.` });
+        setAmount({ ...amount, error: `Linked payments are capped at ${LINK_LIMIT.wad.format()}.` });
         return;
       }
       paymentAction("NEW_LINK");
@@ -218,7 +218,7 @@ export const SendCard = style(
 
         <Grid item xs={12}>
           <Typography variant="body2">
-            <span>{`Linked payments are capped at ${LINK_LIMIT.toString()}.`}</span>
+            <span>{`Linked payments are capped at ${LINK_LIMIT.wad.format()}.`}</span>
           </Typography>
         </Grid>
 
