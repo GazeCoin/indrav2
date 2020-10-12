@@ -210,7 +210,7 @@ export const SendCard = style(
           <Grid container direction="row" justify="center" alignItems="center">
             <Typography variant="h2">
               <span>
-                {balance.channel.gaze.format()}
+                {balance.channel.gaze.div(WEI_MULTIPLIER).toString()}
               </span>
             </Typography>
           </Grid>
