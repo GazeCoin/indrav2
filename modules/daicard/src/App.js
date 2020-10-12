@@ -656,6 +656,7 @@ class App extends React.Component {
       saiBalance,
       state,
       token,
+      gazeToken,
       wallet,
     } = this.state;
     const address = wallet ? wallet.address : channel ? channel.signerAddress : AddressZero;
@@ -749,7 +750,7 @@ class App extends React.Component {
                   balance={balance}
                   channel={channel}
                   ethProvider={ethProvider}
-                  token={token}
+                  token={gazeToken}
                 />
               )}
             />

@@ -26,7 +26,7 @@ import { usePublicIdentifier, PublicIdentifierInput } from "./input";
 
 const { Zero } = constants;
 
-const LINK_LIMIT = Currency.DAI("10"); // $10 capped linked payments
+const LINK_LIMIT = toBN("500"); // $10 capped linked payments
 
 const style = withStyles((theme) => ({
   modalContent: {
@@ -60,7 +60,7 @@ export const SendCard = style(
     const [recipient, setRecipient, setRecipientError] = usePublicIdentifier(null, ethProvider);
 
     // need to extract token balance so it can be used as a dependency for the hook properly
-    const tokenBalance = balance.channel.token.wad;
+    const tokenBalance = balance.channel.gaze;
     const updateAmountHandler = useCallback(
       (rawValue) => {
         let value = null;
@@ -70,15 +70,15 @@ export const SendCard = style(
         }
         if (!error) {
           try {
-            value = Currency.DAI(rawValue);
+            value = toBN(rawValue);
           } catch (e) {
             error = `Please enter a valid amount`;
           }
         }
-        if (!error && value && value.wad.gt(tokenBalance)) {
+        if (!error && value && value.gt(tokenBalance)) {
           error = `Invalid amount: must be less than your balance`;
         }
-        if (!error && value && value.wad.lte(Zero)) {
+        if (!error && value && value.lte(Zero)) {
           error = "Invalid amount: must be greater than 0";
         }
         setAmount({
@@ -209,7 +209,7 @@ export const SendCard = style(
           <Grid container direction="row" justify="center" alignItems="center">
             <Typography variant="h2">
               <span>
-                {balance.channel.token.toDAI().format({ decimals: 2, symbol: false, round: false })}
+                {balance.channel.gaze.toString()}
               </span>
             </Typography>
           </Grid>
