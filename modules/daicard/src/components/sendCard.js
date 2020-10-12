@@ -23,6 +23,7 @@ import { sendMachine } from "../state";
 
 import { Copyable } from "./copyable";
 import { usePublicIdentifier, PublicIdentifierInput } from "./input";
+import { WEI_MULTIPLIER } from "../App";
 
 const { Zero } = constants;
 
@@ -209,7 +210,7 @@ export const SendCard = style(
           <Grid container direction="row" justify="center" alignItems="center">
             <Typography variant="h2">
               <span>
-                {balance.channel.gaze.toString()}
+                {balance.channel.gaze.div(WEI_MULTIPLIER).toString()}
               </span>
             </Typography>
           </Grid>
