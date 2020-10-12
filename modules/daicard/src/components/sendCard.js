@@ -76,10 +76,10 @@ export const SendCard = style(
             error = `Please enter a valid amount`;
           }
         }
-        if (!error && value && value.gt(tokenBalance)) {
+        if (!error && value && value.wad.gt(tokenBalance.wad)) {
           error = `Invalid amount: must be less than your balance`;
         }
-        if (!error && value && value.lte(Zero)) {
+        if (!error && value && value.wad.lte(Zero)) {
           error = "Invalid amount: must be greater than 0";
         }
         setAmount({
@@ -132,7 +132,7 @@ export const SendCard = style(
       if (recipient.error && !recipient.value) {
         setRecipientError(null);
       }
-      if (toBN(amount.value.toDEI()).gt(LINK_LIMIT.wad)) {
+      if (amount.value.wad.gt(LINK_LIMIT.wad)) {
         setAmount({ ...amount, error: `Linked payments are capped at ${LINK_LIMIT.format()}.` });
         return;
       }
