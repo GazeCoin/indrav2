@@ -132,7 +132,7 @@ export const SendCard = style(
         setRecipientError(null);
       }
       if (toBN(amount.value.toDEI()).gt(LINK_LIMIT.wad)) {
-        setAmount({ ...amount, error: `Linked payments are capped at ${LINK_LIMIT.format()}.` });
+        setAmount({ ...amount, error: `Linked payments are capped at ${LINK_LIMIT.toString()}.` });
         return;
       }
       paymentAction("NEW_LINK");
@@ -217,7 +217,7 @@ export const SendCard = style(
 
         <Grid item xs={12}>
           <Typography variant="body2">
-            <span>{`Linked payments are capped at ${LINK_LIMIT.format()}.`}</span>
+            <span>{`Linked payments are capped at ${LINK_LIMIT.toString()}.`}</span>
           </Typography>
         </Grid>
 
