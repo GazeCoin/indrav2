@@ -61,7 +61,7 @@ export const SendCard = style(
     const [recipient, setRecipient, setRecipientError] = usePublicIdentifier(null, ethProvider);
 
     // need to extract token balance so it can be used as a dependency for the hook properly
-    const tokenBalance = balance.channel.gaze;
+    const tokenBalance = Currency.DAI(balance.channel.gaze);
     const updateAmountHandler = useCallback(
       (rawValue) => {
         let value = null;
@@ -71,7 +71,7 @@ export const SendCard = style(
         }
         if (!error) {
           try {
-            value = toBN(rawValue);
+            value = Currency.DAI(rawValue);
           } catch (e) {
             error = `Please enter a valid amount`;
           }
@@ -133,7 +133,7 @@ export const SendCard = style(
         setRecipientError(null);
       }
       if (toBN(amount.value.toDEI()).gt(LINK_LIMIT.wad)) {
-        setAmount({ ...amount, error: `Linked payments are capped at ${LINK_LIMIT.wad.format()}.` });
+        setAmount({ ...amount, error: `Linked payments are capped at ${LINK_LIMIT.format()}.` });
         return;
       }
       paymentAction("NEW_LINK");
@@ -210,7 +210,7 @@ export const SendCard = style(
           <Grid container direction="row" justify="center" alignItems="center">
             <Typography variant="h2">
               <span>
-                {balance.channel.gaze.div(WEI_MULTIPLIER).toString()}
+                {balance.channel.gaze.format()}
               </span>
             </Typography>
           </Grid>
@@ -218,7 +218,7 @@ export const SendCard = style(
 
         <Grid item xs={12}>
           <Typography variant="body2">
-            <span>{`Linked payments are capped at ${LINK_LIMIT.wad.format()}.`}</span>
+            <span>{`Linked payments are capped at ${LINK_LIMIT.format()}.`}</span>
           </Typography>
         </Grid>
 
