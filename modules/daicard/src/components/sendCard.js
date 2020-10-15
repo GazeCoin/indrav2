@@ -23,10 +23,11 @@ import { sendMachine } from "../state";
 
 import { Copyable } from "./copyable";
 import { usePublicIdentifier, PublicIdentifierInput } from "./input";
+import { WEI_MULTIPLIER } from "../App";
 
 const { Zero } = constants;
 
-const LINK_LIMIT = toBN("500"); // $10 capped linked payments
+const LINK_LIMIT = Currency.DAI("500"); // $10 capped linked payments
 
 const style = withStyles((theme) => ({
   modalContent: {
@@ -60,7 +61,7 @@ export const SendCard = style(
     const [recipient, setRecipient, setRecipientError] = usePublicIdentifier(null, ethProvider);
 
     // need to extract token balance so it can be used as a dependency for the hook properly
-    const tokenBalance = balance.channel.gaze;
+    const tokenBalance = Currency.DAI(balance.channel.gaze);
     const updateAmountHandler = useCallback(
       (rawValue) => {
         let value = null;
@@ -70,15 +71,15 @@ export const SendCard = style(
         }
         if (!error) {
           try {
-            value = toBN(rawValue);
+            value = Currency.DAI(rawValue);
           } catch (e) {
             error = `Please enter a valid amount`;
           }
         }
-        if (!error && value && value.gt(tokenBalance)) {
+        if (!error && value && value.wad.gt(tokenBalance.wad)) {
           error = `Invalid amount: must be less than your balance`;
         }
-        if (!error && value && value.lte(Zero)) {
+        if (!error && value && value.wad.lte(Zero)) {
           error = "Invalid amount: must be greater than 0";
         }
         setAmount({
@@ -131,7 +132,7 @@ export const SendCard = style(
       if (recipient.error && !recipient.value) {
         setRecipientError(null);
       }
-      if (toBN(amount.value.toDEI()).gt(LINK_LIMIT.wad)) {
+      if (amount.value.wad.gt(LINK_LIMIT.wad)) {
         setAmount({ ...amount, error: `Linked payments are capped at ${LINK_LIMIT.format()}.` });
         return;
       }
@@ -209,7 +210,7 @@ export const SendCard = style(
           <Grid container direction="row" justify="center" alignItems="center">
             <Typography variant="h2">
               <span>
-                {balance.channel.gaze.toString()}
+                {balance.channel.gaze.div(WEI_MULTIPLIER).toString()}
               </span>
             </Typography>
           </Grid>
